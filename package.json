@@ -185,6 +185,16 @@
         "command": "sentry.loadMore",
         "title": "Load More Issues",
         "category": "Sentry"
+      },
+      {
+        "command": "sentry.viewLogs",
+        "title": "View Debug Log",
+        "category": "Sentry"
+      },
+      {
+        "command": "sentry.clearLogs",
+        "title": "Clear Debug Log",
+        "category": "Sentry"
       }
     ],
     "menus": {

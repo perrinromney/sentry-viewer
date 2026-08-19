@@ -4,6 +4,32 @@ const vscode = acquireVsCodeApi();
 const root = document.getElementById('root')!;
 let statusLine: HTMLElement | undefined;
 
+/**
+ * Fields the user has edited since the last save. Re-renders (triggered by
+ * any state push from the extension) restore these from the live DOM instead
+ * of the saved config, so typing is never wiped by a refresh.
+ */
+const dirty = new Set<string>();
+let mappingsDirty = false;
+let preserved: Record<string, string | boolean> = {};
+
+function markDirty(input: HTMLInputElement | HTMLSelectElement): void {
+  input.addEventListener(input instanceof HTMLSelectElement || input.type === 'checkbox' ? 'change' : 'input', () =>
+    dirty.add(input.id),
+  );
+}
+
+function snapshotDirty(): void {
+  preserved = {};
+  for (const id of dirty) {
+    const node = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
+    if (!node) continue;
+    preserved[id] = node instanceof HTMLInputElement && node.type === 'checkbox' ? node.checked : node.value;
+  }
+  const scope = document.querySelector<HTMLInputElement>('input[name="scope"]:checked');
+  if (scope) preserved['__scope'] = scope.value;
+}
+
 function post(message: SettingsFromWebview): void {
   vscode.postMessage(message);
 }
@@ -33,7 +59,8 @@ function textRow(label: string, id: string, value: string, source?: string, data
   const input = el('input');
   input.type = 'text';
   input.id = id;
-  input.value = value;
+  input.value = typeof preserved[id] === 'string' ? (preserved[id] as string) : value;
+  markDirty(input);
   if (datalistValues?.length) {
     const listId = `${id}-list`;
     const datalist = el('datalist');
@@ -56,7 +83,8 @@ function checkbox(label: string, id: string, checked: boolean): HTMLElement {
   const input = el('input');
   input.type = 'checkbox';
   input.id = id;
-  input.checked = checked;
+  input.checked = typeof preserved[id] === 'boolean' ? (preserved[id] as boolean) : checked;
+  markDirty(input);
   wrap.append(input, document.createTextNode(` ${label}`));
   return wrap;
 }
@@ -90,13 +118,19 @@ function mappingRow(from = '', to = ''): HTMLElement {
   toInput.type = 'text';
   toInput.placeholder = 'workspace prefix e.g. app/src/';
   toInput.value = to;
+  for (const input of [fromInput, toInput]) input.addEventListener('input', () => (mappingsDirty = true));
   const remove = el('button', 'secondary', '✕');
-  remove.addEventListener('click', () => row.remove());
+  remove.addEventListener('click', () => {
+    mappingsDirty = true;
+    row.remove();
+  });
   row.append(fromInput, el('span', undefined, '→'), toInput, remove);
   return row;
 }
 
 function render(model: SettingsViewModel): void {
+  snapshotDirty();
+  const preservedMappings = mappingsDirty ? collectMappings() : undefined;
   root.textContent = '';
 
   /* Connection */
@@ -108,8 +142,16 @@ function render(model: SettingsViewModel): void {
 
   const optionsRow = el('div', 'row');
   const loadButton = el('button', 'secondary', model.organizations ? 'Reload org/project suggestions' : 'Load org/project suggestions');
-  loadButton.addEventListener('click', () => post({ type: 'loadOptions' }));
+  loadButton.addEventListener('click', () => {
+    setStatus('Loading suggestions…', false);
+    post({ type: 'loadOptions', organization: val('organization'), baseUrl: val('baseUrl') });
+  });
   optionsRow.append(loadButton);
+  if (model.organizations) {
+    optionsRow.append(
+      el('span', 'note', `${model.organizations.length} org${model.organizations.length === 1 ? '' : 's'}, ${model.projects?.length ?? 0} projects loaded — suggestions appear as you type in the fields above`),
+    );
+  }
   connection.append(optionsRow);
 
   const tokenRow = el('div', 'row');
@@ -135,7 +177,7 @@ function render(model: SettingsViewModel): void {
   const testButton = el('button', undefined, 'Test Connection');
   testButton.addEventListener('click', () => {
     setStatus('Testing connection…', false);
-    post({ type: 'testConnection' });
+    post({ type: 'testConnection', organization: val('organization'), project: val('project'), baseUrl: val('baseUrl') });
   });
   tokenRow.append(testButton);
   connection.append(tokenRow);
@@ -174,12 +216,14 @@ function render(model: SettingsViewModel): void {
   statsLabel.htmlFor = 'statsPeriod';
   const statsSelect = el('select');
   statsSelect.id = 'statsPeriod';
+  const statsCurrent = typeof preserved.statsPeriod === 'string' ? preserved.statsPeriod : model.statsPeriod.value;
   for (const period of ['24h', '7d', '14d', '30d', '90d']) {
     const option = el('option', undefined, period);
     option.value = period;
-    option.selected = period === model.statsPeriod.value;
+    option.selected = period === statsCurrent;
     statsSelect.append(option);
   }
+  markDirty(statsSelect);
   statsRow.append(statsLabel, statsSelect, el('span', 'provenance', `from ${sourceLabel(model.statsPeriod.source)}`));
   behavior.append(statsRow);
 
@@ -190,7 +234,9 @@ function render(model: SettingsViewModel): void {
   pollInput.type = 'number';
   pollInput.id = 'pollIntervalSeconds';
   pollInput.min = '0';
-  pollInput.value = String(model.pollIntervalSeconds);
+  pollInput.value =
+    typeof preserved.pollIntervalSeconds === 'string' ? preserved.pollIntervalSeconds : String(model.pollIntervalSeconds);
+  markDirty(pollInput);
   pollRow.append(pollLabel, pollInput);
   behavior.append(pollRow);
 
@@ -214,16 +260,40 @@ function render(model: SettingsViewModel): void {
   mappings.append(el('div', 'note', 'Map Sentry stack-frame path prefixes to workspace-relative prefixes when suffix matching is not enough.'));
   const mappingList = el('div');
   mappingList.id = 'mappingList';
-  for (const [from, to] of Object.entries(model.pathMappings.value)) {
+  for (const [from, to] of Object.entries(preservedMappings ?? model.pathMappings.value)) {
     mappingList.append(mappingRow(from, to));
   }
   mappings.append(mappingList);
   const addRow = el('div', 'row');
   const addButton = el('button', 'secondary', '+ Add mapping');
-  addButton.addEventListener('click', () => mappingList.append(mappingRow()));
+  addButton.addEventListener('click', () => {
+    mappingsDirty = true;
+    mappingList.append(mappingRow());
+  });
   addRow.append(addButton, el('span', 'provenance', `from ${sourceLabel(model.pathMappings.source)}`));
   mappings.append(addRow);
   root.append(mappings);
+
+  /* Diagnostics */
+  const diagnostics = el('fieldset');
+  diagnostics.append(el('legend', undefined, 'Diagnostics'));
+  const logRow = el('div', 'row');
+  if (model.log.path) {
+    const kb = (model.log.sizeBytes / 1024).toFixed(1);
+    logRow.append(el('span', undefined, `Debug log: ${model.log.path} (${kb} KB)`));
+  } else {
+    logRow.append(
+      el('span', 'note', 'Debug log file is written once a .sentry_viewer config exists; until then, logs go to the "Sentry" output channel.'),
+    );
+  }
+  const viewLogButton = el('button', 'secondary', 'View Log');
+  viewLogButton.addEventListener('click', () => post({ type: 'viewLogs' }));
+  const clearLogButton = el('button', 'secondary', 'Clear Log');
+  clearLogButton.addEventListener('click', () => post({ type: 'clearLogs' }));
+  logRow.append(viewLogButton, clearLogButton);
+  diagnostics.append(logRow);
+  diagnostics.append(el('div', 'note', 'The log is gitignored and safe to copy/paste for debugging — auth tokens are redacted.'));
+  root.append(diagnostics);
 
   /* Save bar */
   const saveBar = el('div', 'savebar');
@@ -233,6 +303,8 @@ function render(model: SettingsViewModel): void {
     { id: 'workspace', label: 'Workspace .sentry_viewer', disabled: !model.workspace.hasFolder },
     { id: 'user', label: 'User settings' },
   ];
+  const scopeCurrent =
+    typeof preserved['__scope'] === 'string' ? preserved['__scope'] : model.workspace.hasFolder ? 'workspace' : 'user';
   for (const scope of scopes) {
     const label = el('label');
     const radio = el('input');
@@ -240,7 +312,7 @@ function render(model: SettingsViewModel): void {
     radio.name = 'scope';
     radio.value = scope.id;
     radio.disabled = Boolean(scope.disabled);
-    radio.checked = scope.id === (model.workspace.hasFolder ? 'workspace' : 'user');
+    radio.checked = scope.id === scopeCurrent && !scope.disabled;
     label.append(radio, document.createTextNode(` ${scope.label}  `));
     scopeWrap.append(label);
   }
@@ -289,6 +361,9 @@ window.addEventListener('message', (event: MessageEvent<SettingsToWebview>) => {
       render(message.vm);
       break;
     case 'saved':
+      dirty.clear();
+      mappingsDirty = false;
+      preserved = {};
       setStatus('Saved ✓', false);
       break;
     case 'testResult':

@@ -16,7 +16,7 @@ import { MemberCache } from './store/memberCache';
 import { DetailViewProvider } from './views/detailView';
 import { IssueTreeProvider, TreeNode } from './views/issueTree';
 import { SettingsPanel } from './views/settingsPanel';
-import { initLog, log } from './util/log';
+import { clearLog, initLog, log, setLogDirectory, showLog } from './util/log';
 
 /** Unstable API returned from activate(), used by integration tests. */
 export interface SentryViewerApi {
@@ -30,6 +30,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<Sentry
 
   const config = await ConfigService.create(context);
   context.subscriptions.push(config);
+  const syncLogDirectory = () => {
+    const folder = config.workspaceInfo().folder;
+    setLogDirectory(folder ? vscode.Uri.joinPath(folder.uri, '.sentry_viewer').fsPath : undefined);
+  };
+  syncLogDirectory();
   const auth = new AuthService(context, config);
 
   let authFailNotified = false;
@@ -104,16 +109,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<Sentry
       if (await auth.signIn()) {
         authFailNotified = false;
         store.resumePolling();
-        try {
-          const projects = await client.listProjects();
-          const cfg = config.get();
-          void vscode.window.showInformationMessage(
-            cfg.project
-              ? `Connected to Sentry: ${cfg.organization} / ${cfg.project}`
-              : `Connected to Sentry org "${cfg.organization}" (${projects.length} projects)`,
-          );
-        } catch (e) {
-          void vscode.window.showWarningMessage(`Signed in, but the connection test failed: ${e instanceof Error ? e.message : e}`);
+        const cfg = config.get();
+        if (!cfg.organization) {
+          void vscode.window
+            .showInformationMessage('Signed in to Sentry. Next, set your organization and project.', 'Open Sentry Settings')
+            .then((choice) => {
+              if (choice) void vscode.commands.executeCommand('sentry.openSettings');
+            });
+        } else {
+          try {
+            const projects = await client.listProjects();
+            void vscode.window.showInformationMessage(
+              cfg.project
+                ? `Connected to Sentry: ${cfg.organization} / ${cfg.project}`
+                : `Connected to Sentry org "${cfg.organization}" (${projects.length} projects)`,
+            );
+          } catch (e) {
+            void vscode.window.showWarningMessage(`Signed in, but the connection test failed: ${e instanceof Error ? e.message : e}`);
+          }
         }
         await refreshAll();
       }
@@ -129,7 +142,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<Sentry
     }),
 
     vscode.commands.registerCommand('sentry.openSettings', () => {
-      SettingsPanel.show(context.extensionUri, config, auth, client);
+      SettingsPanel.show(context.extensionUri, config, auth);
+    }),
+
+    vscode.commands.registerCommand('sentry.viewLogs', () => showLog()),
+
+    vscode.commands.registerCommand('sentry.clearLogs', async () => {
+      await clearLog();
+      vscode.window.setStatusBarMessage('Sentry: debug log cleared', 3000);
     }),
 
     vscode.commands.registerCommand('sentry.initWorkspaceConfig', async () => {
@@ -224,6 +244,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Sentry
 
   context.subscriptions.push(
     config.onDidChange(() => {
+      syncLogDirectory();
       memberCache.invalidate();
       void refreshAll();
     }),

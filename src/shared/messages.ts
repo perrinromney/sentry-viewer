@@ -66,6 +66,7 @@ export interface SettingsViewModel {
     hasLocal: boolean;
     localGitignored: boolean;
   };
+  log: { path?: string; sizeBytes: number };
   organizations?: string[];
   projects?: string[];
 }
@@ -96,7 +97,9 @@ export type SettingsFromWebview =
     }
   | { type: 'setToken'; scope: 'secret-storage' | 'workspace' }
   | { type: 'importCliToken' }
-  | { type: 'testConnection' }
+  | { type: 'testConnection'; organization?: string; project?: string; baseUrl?: string }
   | { type: 'createWorkspaceConfig' }
   | { type: 'openConfigFile' }
-  | { type: 'loadOptions' };
+  | { type: 'viewLogs' }
+  | { type: 'clearLogs' }
+  | { type: 'loadOptions'; organization?: string; baseUrl?: string };

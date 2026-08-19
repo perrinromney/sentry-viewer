@@ -2,8 +2,9 @@ import * as vscode from 'vscode';
 import { AuthService } from '../auth';
 import { ConfigService } from '../config/workspaceConfig';
 import { SentryClient } from '../sentry/client';
+import * as fs from 'fs/promises';
 import { SettingsFromWebview, SettingsToWebview, SettingsViewModel } from '../shared/messages';
-import { log } from '../util/log';
+import { clearLog, getLogFile, log, showLog } from '../util/log';
 import { makeNonce } from './detailView';
 
 export class SettingsPanel {
@@ -11,12 +12,7 @@ export class SettingsPanel {
   private readonly disposables: vscode.Disposable[] = [];
   private options: { organizations?: string[]; projects?: string[] } = {};
 
-  static show(
-    extensionUri: vscode.Uri,
-    config: ConfigService,
-    auth: AuthService,
-    client: SentryClient,
-  ): void {
+  static show(extensionUri: vscode.Uri, config: ConfigService, auth: AuthService): void {
     if (SettingsPanel.current) {
       SettingsPanel.current.panel.reveal();
       return;
@@ -25,7 +21,7 @@ export class SettingsPanel {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'dist'), vscode.Uri.joinPath(extensionUri, 'media')],
     });
-    SettingsPanel.current = new SettingsPanel(panel, extensionUri, config, auth, client);
+    SettingsPanel.current = new SettingsPanel(panel, extensionUri, config, auth);
   }
 
   private constructor(
@@ -33,7 +29,6 @@ export class SettingsPanel {
     extensionUri: vscode.Uri,
     private readonly config: ConfigService,
     private readonly auth: AuthService,
-    private readonly client: SentryClient,
   ) {
     const nonce = makeNonce();
     const scriptUri = panel.webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'dist', 'webview', 'settings.js'));
@@ -61,6 +56,22 @@ export class SettingsPanel {
 
   private post(message: SettingsToWebview): void {
     void this.panel.webview.postMessage(message);
+  }
+
+  /**
+   * Client that targets the org/baseUrl currently typed into the form (not
+   * yet saved), so Test Connection and suggestion loading work while the
+   * user is still configuring. No onAuthFail: a bad probe here must not
+   * trigger the global "session invalid" flow.
+   */
+  private clientFor(overrides: { organization?: string; baseUrl?: string }): SentryClient {
+    const cfg = () => this.config.get();
+    return new SentryClient({
+      getBaseUrl: () => (overrides.baseUrl !== undefined ? overrides.baseUrl.trim().replace(/\/$/, '') || cfg().baseUrl : cfg().baseUrl),
+      getOrg: () => (overrides.organization !== undefined ? overrides.organization.trim() : cfg().organization),
+      getToken: () => this.auth.getToken(),
+      log,
+    });
   }
 
   private async buildViewModel(): Promise<SettingsViewModel> {
@@ -95,8 +106,16 @@ export class SettingsPanel {
         hasLocal: info.hasLocal,
         localGitignored: info.localGitignored,
       },
+      log: await this.logInfo(),
       ...this.options,
     };
+  }
+
+  private async logInfo(): Promise<SettingsViewModel['log']> {
+    const path = getLogFile();
+    if (!path) return { sizeBytes: 0 };
+    const stat = await fs.stat(path).catch(() => undefined);
+    return { path, sizeBytes: stat?.size ?? 0 };
   }
 
   private async postState(): Promise<void> {
@@ -109,17 +128,32 @@ export class SettingsPanel {
         await this.postState();
         break;
 
-      case 'loadOptions':
+      case 'loadOptions': {
+        const probe = this.clientFor(message);
         try {
-          const orgs = await this.client.listOrganizations();
+          const orgs = await probe.listOrganizations();
           this.options.organizations = orgs.map((o) => o.slug);
-          const projects = await this.client.listProjects();
-          this.options.projects = projects.map((p) => p.slug);
+          // If no org is chosen yet but the token only sees one, use it for
+          // the project list (and the webview will suggest it in the field).
+          let orgForProjects = message.organization?.trim() ?? this.config.get().organization;
+          if (!orgForProjects && orgs.length === 1) orgForProjects = orgs[0].slug;
+          if (orgForProjects) {
+            const projects = await this.clientFor({ ...message, organization: orgForProjects }).listProjects();
+            this.options.projects = projects.map((p) => p.slug);
+          } else {
+            this.options.projects = undefined;
+          }
         } catch (e) {
           log(`Settings: failed to load orgs/projects: ${e}`);
+          this.post({
+            type: 'testResult',
+            ok: false,
+            message: `Could not load suggestions: ${e instanceof Error ? e.message : e}`,
+          });
         }
         await this.postState();
         break;
+      }
 
       case 'save': {
         const c = message.changes;
@@ -184,22 +218,49 @@ export class SettingsPanel {
         await this.postState();
         break;
 
-      case 'testConnection':
+      case 'testConnection': {
+        // Staged test against the values currently in the form: token → org → project.
+        if (!(await this.auth.getToken())) {
+          this.post({ type: 'testResult', ok: false, message: 'No token set — set one or import from sentry-cli first.' });
+          break;
+        }
+        const probe = this.clientFor(message);
+        const org = message.organization?.trim() ?? this.config.get().organization;
+        const project = message.project?.trim() ?? this.config.get().project;
         try {
-          const projects = await this.client.listProjects();
-          const cfg = this.config.get();
-          const found = projects.find((p) => p.slug === cfg.project);
+          const orgs = await probe.listOrganizations();
+          if (!org) {
+            this.post({
+              type: 'testResult',
+              ok: true,
+              message: `Token is valid. Visible organizations: ${orgs.map((o) => o.slug).join(', ') || '(none)'} — set one above.`,
+            });
+            break;
+          }
+          const projects = await probe.listProjects();
+          if (!project) {
+            this.post({
+              type: 'testResult',
+              ok: true,
+              message: `Connected to org "${org}" (${projects.length} projects: ${projects.slice(0, 5).map((p) => p.slug).join(', ')}${projects.length > 5 ? ', …' : ''}) — set a project above.`,
+            });
+            break;
+          }
+          const found = projects.find((p) => p.slug === project);
           this.post({
             type: 'testResult',
-            ok: true,
+            ok: Boolean(found),
             message: found
-              ? `Connected: ${cfg.organization} / ${found.slug} (project id ${found.id})`
-              : `Connected to org "${cfg.organization}" (${projects.length} projects), but project "${cfg.project}" was not found`,
+              ? `Connected: ${org} / ${found.slug} (project id ${found.id})`
+              : `Org "${org}" is reachable, but project "${project}" was not found. Projects: ${projects.slice(0, 8).map((p) => p.slug).join(', ')}`,
           });
         } catch (e) {
-          this.post({ type: 'testResult', ok: false, message: `Connection failed: ${e instanceof Error ? e.message : e}` });
+          const detail = e instanceof Error ? e.message : String(e);
+          const hint = /404/.test(detail) && org ? ` — is organization "${org}" correct?` : '';
+          this.post({ type: 'testResult', ok: false, message: `Connection failed: ${detail}${hint}` });
         }
         break;
+      }
 
       case 'createWorkspaceConfig':
         await vscode.commands.executeCommand('sentry.initWorkspaceConfig');
@@ -211,6 +272,16 @@ export class SettingsPanel {
         if (path) await vscode.window.showTextDocument(vscode.Uri.file(path));
         break;
       }
+
+      case 'viewLogs':
+        await showLog();
+        break;
+
+      case 'clearLogs':
+        await clearLog();
+        this.post({ type: 'testResult', ok: true, message: 'Debug log cleared.' });
+        await this.postState();
+        break;
     }
   }
 }

@@ -91,7 +91,9 @@ export class SentryClient {
   }
 
   private org(): string {
-    return encodeURIComponent(this.opts.getOrg());
+    const org = this.opts.getOrg();
+    if (!org) throw new SentryApiError('No Sentry organization configured', 400);
+    return encodeURIComponent(org);
   }
 
   async listIssues(o: ListIssuesOptions): Promise<{ issues: Issue[]; nextCursor?: string }> {

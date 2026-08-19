@@ -195,7 +195,7 @@ export class ConfigService implements vscode.Disposable {
     };
     if (values.baseUrl && values.baseUrl !== 'https://sentry.io') config.baseUrl = values.baseUrl;
     await fs.writeFile(configFile, JSON.stringify(config, null, 2) + '\n');
-    await fs.writeFile(path.join(dir, '.gitignore'), 'local.json\n');
+    await fs.writeFile(path.join(dir, '.gitignore'), 'local.json\ndebug.log\ndebug.log.old\n');
     await this.reload();
     return configFile;
   }
@@ -221,7 +221,7 @@ export class ConfigService implements vscode.Disposable {
     try {
       await fs.access(path.join(dir, '.gitignore'));
     } catch {
-      await fs.writeFile(path.join(dir, '.gitignore'), 'local.json\n');
+      await fs.writeFile(path.join(dir, '.gitignore'), 'local.json\ndebug.log\ndebug.log.old\n');
     }
     await this.reload();
   }
