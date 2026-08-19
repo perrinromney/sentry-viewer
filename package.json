@@ -1,0 +1,409 @@
+{
+  "name": "sentry-viewer",
+  "displayName": "Sentry Viewer",
+  "description": "Browse, triage, and jump to code for Sentry issues without leaving VS Code.",
+  "version": "0.1.0",
+  "publisher": "allucent",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "package": "npm run typecheck && npm run build && vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "1.90.0",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "sentry",
+          "title": "Sentry",
+          "icon": "media/sentry.svg"
+        }
+      ],
+      "panel": [
+        {
+          "id": "sentryPanel",
+          "title": "Sentry",
+          "icon": "media/sentry.svg"
+        }
+      ]
+    },
+    "views": {
+      "sentry": [
+        {
+          "id": "sentry.issues",
+          "name": "Issues",
+          "icon": "media/sentry.svg"
+        }
+      ],
+      "sentryPanel": [
+        {
+          "id": "sentry.issueDetail",
+          "name": "Issue Detail",
+          "type": "webview",
+          "icon": "media/sentry.svg"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "sentry.issues",
+        "contents": "Sign in to Sentry to see issues.\n[Sign In](command:sentry.signIn)",
+        "when": "!sentry.signedIn"
+      },
+      {
+        "view": "sentry.issues",
+        "contents": "Signed in, but no organization/project is configured.\nCreate a workspace config, or set sentry.organization and sentry.project in settings.\n[Open Sentry Settings](command:sentry.openSettings)\n[Create .sentry_viewer Config](command:sentry.initWorkspaceConfig)",
+        "when": "sentry.signedIn && !sentry.configured"
+      }
+    ],
+    "commands": [
+      {
+        "command": "sentry.signIn",
+        "title": "Sign In",
+        "category": "Sentry"
+      },
+      {
+        "command": "sentry.signOut",
+        "title": "Sign Out",
+        "category": "Sentry"
+      },
+      {
+        "command": "sentry.openSettings",
+        "title": "Open Sentry Settings",
+        "category": "Sentry",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "sentry.initWorkspaceConfig",
+        "title": "Create .sentry_viewer Workspace Config",
+        "category": "Sentry"
+      },
+      {
+        "command": "sentry.selectWorkspaceConfig",
+        "title": "Select Active Workspace Config",
+        "category": "Sentry"
+      },
+      {
+        "command": "sentry.refresh",
+        "title": "Refresh Issues",
+        "category": "Sentry",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "sentry.search",
+        "title": "Search Issues (Sentry Syntax)",
+        "category": "Sentry",
+        "icon": "$(search)"
+      },
+      {
+        "command": "sentry.filter",
+        "title": "Filter Issues…",
+        "category": "Sentry",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "sentry.clearFilters",
+        "title": "Clear Filters",
+        "category": "Sentry",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "sentry.openIssue",
+        "title": "Open Issue",
+        "category": "Sentry"
+      },
+      {
+        "command": "sentry.openIssueFromEditor",
+        "title": "Show Issue for This Line",
+        "category": "Sentry"
+      },
+      {
+        "command": "sentry.openCodeLocation",
+        "title": "Go to Code Location",
+        "category": "Sentry"
+      },
+      {
+        "command": "sentry.openInBrowser",
+        "title": "Open in Sentry",
+        "category": "Sentry"
+      },
+      {
+        "command": "sentry.resolveIssue",
+        "title": "Resolve",
+        "category": "Sentry",
+        "icon": "$(check)"
+      },
+      {
+        "command": "sentry.resolveInNextRelease",
+        "title": "Resolve in Next Release",
+        "category": "Sentry"
+      },
+      {
+        "command": "sentry.unresolveIssue",
+        "title": "Unresolve",
+        "category": "Sentry"
+      },
+      {
+        "command": "sentry.archiveIssue",
+        "title": "Archive",
+        "category": "Sentry",
+        "icon": "$(archive)"
+      },
+      {
+        "command": "sentry.unarchiveIssue",
+        "title": "Unarchive",
+        "category": "Sentry"
+      },
+      {
+        "command": "sentry.assignIssue",
+        "title": "Assign To…",
+        "category": "Sentry",
+        "icon": "$(person-add)"
+      },
+      {
+        "command": "sentry.loadMore",
+        "title": "Load More Issues",
+        "category": "Sentry"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "sentry.refresh",
+          "when": "view == sentry.issues",
+          "group": "navigation@1"
+        },
+        {
+          "command": "sentry.search",
+          "when": "view == sentry.issues",
+          "group": "navigation@2"
+        },
+        {
+          "command": "sentry.filter",
+          "when": "view == sentry.issues",
+          "group": "navigation@3"
+        },
+        {
+          "command": "sentry.clearFilters",
+          "when": "view == sentry.issues && sentry.filtersActive",
+          "group": "navigation@4"
+        },
+        {
+          "command": "sentry.openSettings",
+          "when": "view == sentry.issues",
+          "group": "navigation@5"
+        },
+        {
+          "command": "sentry.signOut",
+          "when": "view == sentry.issues && sentry.signedIn",
+          "group": "9_auth"
+        },
+        {
+          "command": "sentry.initWorkspaceConfig",
+          "when": "view == sentry.issues",
+          "group": "8_config@1"
+        },
+        {
+          "command": "sentry.selectWorkspaceConfig",
+          "when": "view == sentry.issues && sentry.multipleConfigs",
+          "group": "8_config@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "sentry.resolveIssue",
+          "when": "view == sentry.issues && viewItem =~ /issue:(unresolved|ignored)/",
+          "group": "inline@1"
+        },
+        {
+          "command": "sentry.archiveIssue",
+          "when": "view == sentry.issues && viewItem == issue:unresolved",
+          "group": "inline@2"
+        },
+        {
+          "command": "sentry.assignIssue",
+          "when": "view == sentry.issues && viewItem =~ /^issue:/",
+          "group": "inline@3"
+        },
+        {
+          "command": "sentry.resolveIssue",
+          "when": "view == sentry.issues && viewItem =~ /issue:(unresolved|ignored)/",
+          "group": "1_triage@1"
+        },
+        {
+          "command": "sentry.resolveInNextRelease",
+          "when": "view == sentry.issues && viewItem == issue:unresolved",
+          "group": "1_triage@2"
+        },
+        {
+          "command": "sentry.archiveIssue",
+          "when": "view == sentry.issues && viewItem == issue:unresolved",
+          "group": "1_triage@3"
+        },
+        {
+          "command": "sentry.unarchiveIssue",
+          "when": "view == sentry.issues && viewItem == issue:ignored",
+          "group": "1_triage@4"
+        },
+        {
+          "command": "sentry.unresolveIssue",
+          "when": "view == sentry.issues && viewItem =~ /issue:(resolved|ignored)/",
+          "group": "1_triage@5"
+        },
+        {
+          "command": "sentry.assignIssue",
+          "when": "view == sentry.issues && viewItem =~ /^issue:/",
+          "group": "1_triage@6"
+        },
+        {
+          "command": "sentry.openCodeLocation",
+          "when": "view == sentry.issues && viewItem =~ /^issue:/",
+          "group": "2_nav@1"
+        },
+        {
+          "command": "sentry.openInBrowser",
+          "when": "view == sentry.issues && viewItem =~ /^issue:/",
+          "group": "2_nav@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "sentry.openIssue",
+          "when": "false"
+        },
+        {
+          "command": "sentry.openIssueFromEditor",
+          "when": "false"
+        },
+        {
+          "command": "sentry.loadMore",
+          "when": "false"
+        },
+        {
+          "command": "sentry.openCodeLocation",
+          "when": "sentry.signedIn"
+        },
+        {
+          "command": "sentry.openInBrowser",
+          "when": "sentry.signedIn"
+        },
+        {
+          "command": "sentry.resolveIssue",
+          "when": "sentry.signedIn"
+        },
+        {
+          "command": "sentry.resolveInNextRelease",
+          "when": "sentry.signedIn"
+        },
+        {
+          "command": "sentry.unresolveIssue",
+          "when": "sentry.signedIn"
+        },
+        {
+          "command": "sentry.archiveIssue",
+          "when": "sentry.signedIn"
+        },
+        {
+          "command": "sentry.unarchiveIssue",
+          "when": "sentry.signedIn"
+        },
+        {
+          "command": "sentry.assignIssue",
+          "when": "sentry.signedIn"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Sentry Viewer",
+      "properties": {
+        "sentry.baseUrl": {
+          "type": "string",
+          "default": "https://sentry.io",
+          "description": "Sentry server base URL (change for self-hosted Sentry)."
+        },
+        "sentry.organization": {
+          "type": "string",
+          "default": "",
+          "description": "Sentry organization slug. Can be overridden per-repo by .sentry_viewer/config.json."
+        },
+        "sentry.project": {
+          "type": "string",
+          "default": "",
+          "description": "Sentry project slug. Can be overridden per-repo by .sentry_viewer/config.json."
+        },
+        "sentry.statsPeriod": {
+          "type": "string",
+          "default": "90d",
+          "enum": [
+            "24h",
+            "7d",
+            "14d",
+            "30d",
+            "90d"
+          ],
+          "description": "Time window for listed issues."
+        },
+        "sentry.pollIntervalSeconds": {
+          "type": "number",
+          "default": 60,
+          "minimum": 0,
+          "description": "How often to refresh issues and the badge count. 0 disables polling."
+        },
+        "sentry.openCodeOnSelect": {
+          "type": "boolean",
+          "default": true,
+          "description": "Jump to the best matching code location when an issue is selected."
+        },
+        "sentry.inline.codeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a CodeLens above lines matched to open Sentry issues."
+        },
+        "sentry.inline.decorations": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show gutter icons and line highlights on lines matched to open Sentry issues."
+        },
+        "sentry.inline.hovers": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a hover card with issue details and actions on matched lines."
+        },
+        "sentry.inline.statusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a status bar item with the number of Sentry issues touching the active file."
+        },
+        "sentry.pathMappings": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Manual mappings from Sentry stack-frame path prefixes to workspace-relative prefixes, e.g. {\"src/\": \"packages/app/src/\"}."
+        }
+      }
+    }
+  }
+}
