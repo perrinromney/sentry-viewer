@@ -196,3 +196,76 @@ a { color: var(--vscode-textLink-foreground); }
   margin-top: 4px;
 }
 .mapping-row input { min-width: 180px; }
+
+/* Sidebar filter view */
+.filters-body { padding: 6px 10px 8px; }
+
+.filters .frow {
+  display: flex;
+  gap: 4px;
+  margin-top: 5px;
+  align-items: center;
+}
+
+.filters input[type="text"], .filters select {
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 2px;
+  padding: 2px 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+  width: 100%;
+}
+.filters input:focus, .filters select:focus { outline: 1px solid var(--vscode-focusBorder); }
+
+.filters .two > select { flex: 1 1 50%; }
+
+.filters .add-filter select { flex: 0 1 42%; }
+.filters .add-filter input { flex: 1 1 30%; }
+.filters .add-filter button { flex: none; padding: 2px 8px; }
+
+.filters .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 7px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  border-radius: 9px;
+  padding: 1px 4px 1px 8px;
+  font-size: 0.88em;
+}
+.chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+.chip-x {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 3px;
+  font-size: 0.9em;
+  border-radius: 50%;
+}
+.chip-x:hover { background: rgba(128, 128, 128, 0.35); }
+
+.filters .footer {
+  justify-content: space-between;
+  margin-top: 7px;
+}
+.filters .footer button { flex: none; padding: 1px 8px; }
+.filters .note { color: var(--vscode-descriptionForeground); font-size: 0.9em; }
+.filters .empty { padding: 8px 2px; }

@@ -14,6 +14,7 @@ import { SentryClient } from './sentry/client';
 import { IssueStore } from './store/issueStore';
 import { MemberCache } from './store/memberCache';
 import { DetailViewProvider } from './views/detailView';
+import { FilterViewProvider } from './views/filterView';
 import { IssueTreeProvider, TreeNode } from './views/issueTree';
 import { SettingsPanel } from './views/settingsPanel';
 import { clearLog, initLog, log, setLogDirectory, showLog } from './util/log';
@@ -76,6 +77,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<Sentry
     const node = e.selection[0];
     if (node?.kind === 'issue') store.selectedIssueId = node.issue.id;
   });
+
+  /* Sidebar filter view */
+  const filterView = new FilterViewProvider(context.extensionUri, store, memberCache, config, auth);
+  context.subscriptions.push(
+    filterView,
+    vscode.window.registerWebviewViewProvider(FilterViewProvider.viewId, filterView, {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
+  );
 
   /* Bottom panel detail view */
   const detail = new DetailViewProvider(context.extensionUri, store, workspaceIndex, config);

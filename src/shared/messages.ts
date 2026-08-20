@@ -41,6 +41,36 @@ export type DetailFromWebview =
   | { type: 'openInBrowser'; issueId: string }
   | { type: 'action'; issueId: string; action: 'resolve' | 'resolveNextRelease' | 'archive' | 'unresolve' | 'assign' };
 
+/* ---- Sidebar filter view ---- */
+
+export interface FilterViewModel {
+  enabled: boolean;
+  /** Hint shown when disabled ("sign in", "configure org/project"). */
+  disabledReason?: string;
+  status: 'unresolved' | 'ignored' | 'resolved' | 'all';
+  rawQuery: string;
+  assigned: string;
+  clientText: string;
+  serverTags: Record<string, string>;
+  clientContexts: Record<string, string>;
+  /** Basename of the active file filter, if any. */
+  fileName?: string;
+  fields: { name: string; tier: 'tag' | 'context' }[];
+  suggestions: Record<string, string[]>;
+  assignees: { label: string; value: string }[];
+  visibleCount: number;
+  totalCount: number;
+}
+
+export type FiltersToWebview = { type: 'state'; vm: FilterViewModel };
+
+export type FiltersFromWebview =
+  | { type: 'ready' }
+  | { type: 'set'; patch: { status?: FilterViewModel['status']; rawQuery?: string; assigned?: string; clientText?: string } }
+  | { type: 'addFilter'; tier: 'tag' | 'context'; field: string; value: string }
+  | { type: 'removeFilter'; kind: 'tag' | 'context' | 'file'; key?: string }
+  | { type: 'clearAll' };
+
 /* ---- Settings window ---- */
 
 export interface SettingsField<T> {

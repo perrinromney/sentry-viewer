@@ -15,7 +15,7 @@ const contexts = await Promise.all([
     minify: !watch,
   }),
   esbuild.context({
-    entryPoints: ['src/webview/main.ts', 'src/webview/settings.ts'],
+    entryPoints: ['src/webview/main.ts', 'src/webview/settings.ts', 'src/webview/filters.ts'],
     outdir: 'dist/webview',
     bundle: true,
     platform: 'browser',

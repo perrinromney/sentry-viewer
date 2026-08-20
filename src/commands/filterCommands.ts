@@ -1,57 +1,10 @@
 import * as vscode from 'vscode';
-import { contextValue } from '../sentry/query';
 import { IssueStore } from '../store/issueStore';
 import { MemberCache } from '../store/memberCache';
-
-const SERVER_TAG_FIELDS = [
-  'level',
-  'environment',
-  'release',
-  'transaction',
-  'url',
-  'user',
-  'browser.name',
-  'os.name',
-  'device.family',
-  'handled',
-  'mechanism',
-  'company',
-  'project',
-  'sessionId',
-];
-
-const CLIENT_CONTEXT_FIELDS = [
-  'vue.componentName',
-  'vue.lifecycleHook',
-  'selection.company',
-  'selection.project',
-  'selection.session',
-  'culture.timezone',
-  'culture.locale',
-];
+import { CLIENT_CONTEXT_FIELDS, contextSuggestions, SERVER_TAG_FIELDS, tagSuggestions } from '../store/suggestions';
 
 function balancedQuotes(text: string): boolean {
   return (text.match(/"/g) ?? []).length % 2 === 0;
-}
-
-/** Distinct values for a server tag key across all cached latest events. */
-function tagSuggestions(store: IssueStore, key: string): string[] {
-  const values = new Set<string>();
-  for (const event of store.events.values()) {
-    const tag = event.tags?.find((t) => t.key === key);
-    if (tag?.value) values.add(tag.value);
-  }
-  return [...values].sort();
-}
-
-/** Distinct values for a dotted context path across all cached latest events. */
-function contextSuggestions(store: IssueStore, path: string): string[] {
-  const values = new Set<string>();
-  for (const event of store.events.values()) {
-    const v = contextValue(event, path);
-    if (v !== undefined && v !== null && typeof v !== 'object') values.add(String(v));
-  }
-  return [...values].sort();
 }
 
 async function pickValue(title: string, suggestions: string[], current?: string): Promise<string | undefined> {
@@ -171,7 +124,7 @@ export function registerFilterCommands(context: vscode.ExtensionContext, store: 
               ? picked.field!
               : await vscode.window.showInputBox({ title: 'Tag key', placeHolder: 'e.g. sessionId', ignoreFocusOut: true });
           if (!field) return;
-          const value = await pickValue(`Filter by tag: ${field}`, tagSuggestions(store, field), f.serverTags[field]);
+          const value = await pickValue(`Filter by tag: ${field}`, tagSuggestions(store.events.values(), field), f.serverTags[field]);
           if (value === undefined) return;
           const serverTags = { ...f.serverTags };
           if (value === '') delete serverTags[field];
@@ -192,7 +145,7 @@ export function registerFilterCommands(context: vscode.ExtensionContext, store: 
           if (!field) return;
           const value = await pickValue(
             `Filter by context: ${field} (substring match on latest event)`,
-            contextSuggestions(store, field),
+            contextSuggestions(store.events.values(), field),
             f.clientContexts[field],
           );
           if (value === undefined) return;

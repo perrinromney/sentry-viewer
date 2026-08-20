@@ -51,6 +51,13 @@
     "views": {
       "sentry": [
         {
+          "id": "sentry.filters",
+          "name": "Filters",
+          "type": "webview",
+          "icon": "media/sentry.svg",
+          "initialSize": 1
+        },
+        {
           "id": "sentry.issues",
           "name": "Issues",
           "icon": "media/sentry.svg"
@@ -203,21 +210,6 @@
           "command": "sentry.refresh",
           "when": "view == sentry.issues",
           "group": "navigation@1"
-        },
-        {
-          "command": "sentry.search",
-          "when": "view == sentry.issues",
-          "group": "navigation@2"
-        },
-        {
-          "command": "sentry.filter",
-          "when": "view == sentry.issues",
-          "group": "navigation@3"
-        },
-        {
-          "command": "sentry.clearFilters",
-          "when": "view == sentry.issues && sentry.filtersActive",
-          "group": "navigation@4"
         },
         {
           "command": "sentry.openSettings",
