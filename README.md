@@ -72,29 +72,41 @@ editor's extensions directory, so `Developer: Reload Window` picks up each
 rebuild without repackaging. Pair it with `npm run watch` for a fast loop.
 
 ```bash
-npm run link                        # every supported editor found on this machine
+npm run links                       # interactive picker (recommended)
+npm run links:list                  # status table only, never interactive
+npm run link                        # link every supported editor found here
 npm run link -- --vscode            # VS Code
 npm run link -- --cursor            # Cursor
 npm run link -- --antigravity       # Antigravity
 npm run link -- --vscodium --windsurf --vscode-insiders
 npm run link -- --path /some/other/extensions   # any other location
-npm run links                       # show link status everywhere
 npm run unlink                      # remove the symlinks again
 ```
 
-`npm run links` prints a status table — one row per editor with its extensions
-directory, colored by state (`linked`, `unlinked`, `stale`, `copy`, `other`,
-`absent`), plus a Notes section for anything that needs attention:
+`npm run links` opens an interactive picker: a numbered table of editors, each
+colored by state (`linked`, `unlinked`, `stale`, `copy`, `other`, `absent`),
+with a Notes section for anything needing attention. Choose a row, then link or
+unlink it; the table is redrawn after each action so you can keep going, and `q`
+quits.
 
 ```
-  ╭──────────────────┬────────────┬───────────────────────────────╮
-  │ EDITOR           │ STATUS     │ EXTENSIONS DIRECTORY          │
-  ├──────────────────┼────────────┼───────────────────────────────┤
-  │ VS Code          │ ● linked   │ ~/.vscode/extensions          │
-  │ Cursor           │ ▲ stale    │ ~/.cursor/extensions          │
-  │ Antigravity      │ · absent   │ ~/.antigravity/extensions     │
-  ╰──────────────────┴────────────┴───────────────────────────────╯
+  ╭───┬──────────────────┬────────────┬───────────────────────────────╮
+  │ # │ EDITOR           │ STATUS     │ EXTENSIONS DIRECTORY          │
+  ├───┼──────────────────┼────────────┼───────────────────────────────┤
+  │ 1 │ VS Code          │ ● linked   │ ~/.vscode/extensions          │
+  │ 2 │ Cursor           │ ▲ stale    │ ~/.cursor/extensions          │
+  │ 3 │ Antigravity      │ · absent   │ ~/.antigravity/extensions     │
+  ╰───┴──────────────────┴────────────┴───────────────────────────────╯
+
+  Row to change [1-3] · (r)efresh · (q)uit ›
 ```
+
+The action prompt says what will happen to that specific row (create the
+directory, replace a foreign link, remove the older link, …). The two risky
+cases — deleting a real installed copy, or creating a missing directory — ask
+for confirmation, and a "yes" applies only to that one action, never to later
+rows. `npm run links:list` (or piping/redirecting `npm run links`) prints the
+plain table with no prompts, which is what scripts and CI should use.
 
 Useful flags: `--all` (every known editor), `--detected` (only ones already
 present), `--create-dir` (create a missing extensions directory, e.g. before an

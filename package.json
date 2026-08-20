@@ -22,9 +22,10 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "package": "npm run typecheck && npm run build && vsce package --no-dependencies",
-    "link": "bash scripts/install-link.sh",
+    "link": "bash scripts/install-link.sh --install",
     "unlink": "bash scripts/install-link.sh --uninstall --all",
-    "links": "bash scripts/install-link.sh --list"
+    "links": "bash scripts/install-link.sh --list",
+    "links:list": "bash scripts/install-link.sh --plain"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

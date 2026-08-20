@@ -3,6 +3,9 @@
 # Symlink this extension into local editor extension directories, so that
 # "Developer: Reload Window" picks up each rebuild without repackaging.
 #
+# With no arguments (or --list) on a terminal this is an interactive picker:
+# a numbered table of editors, choose a row, then link or unlink it.
+#
 # Portability notes:
 #   * Works with bash 3.2 (stock macOS) upwards — no associative arrays,
 #     no GNU-only flags such as `readlink -f`.
@@ -89,11 +92,13 @@ init_style() {
   if use_unicode; then
     BX_TL="╭"; BX_TR="╮"; BX_BL="╰"; BX_BR="╯"; BX_H="─"; BX_V="│"
     BX_T="┬"; BX_B="┴"; BX_X="┼"; BX_L="├"; BX_R="┤"
-    G_OK="●"; G_WARN="▲"; G_OFF="○"; G_NONE="·"; G_ARROW="→"; G_ELLIPSIS="…"; G_SEP="·"
+    G_OK="●"; G_WARN="▲"; G_OFF="○"; G_NONE="·"
+    G_ARROW="→"; G_ELLIPSIS="…"; G_SEP="·"; G_PROMPT="›"
   else
     BX_TL="+"; BX_TR="+"; BX_BL="+"; BX_BR="+"; BX_H="-"; BX_V="|"
     BX_T="+"; BX_B="+"; BX_X="+"; BX_L="+"; BX_R="+"
-    G_OK="*"; G_WARN="!"; G_OFF="o"; G_NONE="."; G_ARROW="->"; G_ELLIPSIS="..."; G_SEP="|"
+    G_OK="*"; G_WARN="!"; G_OFF="o"; G_NONE="."
+    G_ARROW="->"; G_ELLIPSIS="..."; G_SEP="|"; G_PROMPT=">"
   fi
 }
 
@@ -141,6 +146,9 @@ tint() {
   if [ -n "$2" ]; then printf '%s%s%s' "$2" "$1" "$C_RESET"; else printf '%s' "$1"; fi
 }
 
+say()  { printf '%s\n' "$*"; }
+step() { printf '  %s\n' "$*"; }
+
 # ---------- extension identity (from package.json) ----------
 
 if ! command -v node >/dev/null 2>&1; then
@@ -163,7 +171,7 @@ fi
 LINK_NAME="$PUBLISHER.$NAME-$VERSION"
 ID_GLOB="$PUBLISHER.$NAME-*"
 
-# ---------- home roots (handles git-bash/MSYS where $HOME may differ) ----------
+# ---------- editor discovery ----------
 
 home_roots() {
   printf '%s\n' "$HOME"
@@ -185,7 +193,6 @@ home_roots() {
   return 0
 }
 
-# Relative (to home) extension dirs per editor, most canonical first.
 relative_dirs_for() {
   case "$1" in
     vscode)
@@ -252,7 +259,6 @@ cli_for() {
   esac
 }
 
-# Full candidate list: home roots x relative dirs.
 candidates_for() {
   local editor="$1" root rel
   while IFS= read -r root; do
@@ -288,22 +294,28 @@ resolve_dir() {
 
 TARGET_EDITORS=""
 CUSTOM_PATHS=""
-ACTION="install"
+ACTION=""            # ""(=menu) | install | uninstall | list
 DO_BUILD=1
 CREATE_DIR=0
 FORCE=0
 DRY_RUN=0
 DETECTED_ONLY=0
+INTERACTIVE="auto"   # auto | never
 
 usage() {
   cat <<EOF
-Symlink $PUBLISHER.$NAME v$VERSION into local editor extension directories.
+Link $PUBLISHER.$NAME v$VERSION into local editor extension directories.
 
 USAGE
   scripts/install-link.sh [targets] [options]
-  npm run link -- [targets] [options]
+  npm run links                       # interactive picker (this is the default)
+  npm run link -- [targets]           # non-interactive install
 
-TARGETS (repeatable; default: --detected)
+With no target flags on a terminal, an interactive numbered table is shown:
+pick a row, then link or unlink that editor. Piped or redirected output falls
+back to a plain table.
+
+TARGETS (repeatable)
   --vscode                 ~/.vscode/extensions
   --vscode-insiders        ~/.vscode-insiders/extensions
   --vscodium               ~/.vscode-oss/extensions
@@ -318,9 +330,10 @@ TARGETS (repeatable; default: --detected)
   Linux Flatpak sandboxes are probed automatically, as is \$VSCODE_EXTENSIONS.
 
 ACTIONS
-  (default)                create or refresh the symlink
+  --install                link the given targets (implied by any target flag)
   --uninstall              remove this extension's symlink(s)
-  --list                   show link status for every known editor
+  --list                   status table; interactive when run on a terminal
+  --plain                  status table only, never interactive
 
 OPTIONS
   --no-build               skip 'npm run build' (dist/ must already exist)
@@ -333,30 +346,39 @@ OPTIONS
   -h, --help               this help
 
 EXAMPLES
-  npm run link                      # every editor found on this machine
-  npm run link -- --cursor          # Cursor only
-  npm run link -- --antigravity --create-dir
+  npm run links                     # interactive picker
+  npm run link -- --cursor          # link Cursor, no prompts
+  npm run link -- --all --create-dir
   npm run link -- --path ~/.config/SomeFork/extensions
-  npm run link -- --list
-  npm run link -- --uninstall --all
+  npm run unlink                    # remove links everywhere
 EOF
 }
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --vscode|--vscode-insiders|--vscodium|--cursor|--antigravity|--windsurf)
-      TARGET_EDITORS="$TARGET_EDITORS ${1#--}" ;;
-    --all)      TARGET_EDITORS="$TARGET_EDITORS $ALL_EDITORS" ;;
-    --detected) DETECTED_ONLY=1 ;;
+      TARGET_EDITORS="$TARGET_EDITORS ${1#--}"
+      [ -n "$ACTION" ] || ACTION="install" ;;
+    --all)
+      TARGET_EDITORS="$TARGET_EDITORS $ALL_EDITORS"
+      [ -n "$ACTION" ] || ACTION="install" ;;
+    --detected)
+      DETECTED_ONLY=1
+      [ -n "$ACTION" ] || ACTION="install" ;;
     --path)
       [ $# -ge 2 ] || { echo "error: --path needs a directory" >&2; exit 1; }
       CUSTOM_PATHS="$CUSTOM_PATHS
-$(expand_tilde "$2")"; shift ;;
+$(expand_tilde "$2")"
+      [ -n "$ACTION" ] || ACTION="install"
+      shift ;;
     --path=*)
       CUSTOM_PATHS="$CUSTOM_PATHS
-$(expand_tilde "${1#--path=}")" ;;
+$(expand_tilde "${1#--path=}")"
+      [ -n "$ACTION" ] || ACTION="install" ;;
+    --install)                     ACTION="install" ;;
     --uninstall|--remove|--unlink) ACTION="uninstall" ;;
     --list|--status)               ACTION="list" ;;
+    --plain|--no-interactive)      ACTION="list"; INTERACTIVE="never" ;;
     --no-build)    DO_BUILD=0 ;;
     --create-dir)  CREATE_DIR=1 ;;
     --force)       FORCE=1 ;;
@@ -373,12 +395,26 @@ $(expand_tilde "${1#--path=}")" ;;
   shift
 done
 
+[ -n "$ACTION" ] || ACTION="list"
+
 init_style
 
-say()  { printf '%s\n' "$*"; }
-step() { printf '  %s\n' "$*"; }
+# Interactive only for the table view, on a real terminal, with a readable tty.
+TTY_IN=""
+if [ -r /dev/tty ]; then TTY_IN="/dev/tty"; elif [ -t 0 ]; then TTY_IN="/dev/stdin"; fi
+if [ "$ACTION" = "list" ] && [ "$INTERACTIVE" = "auto" ] && [ -t 1 ] && [ -n "$TTY_IN" ]; then
+  ACTION="menu"
+fi
 
-# ---------- list ----------
+prompt_read() { # $1 = prompt; sets ANSWER ("q" on EOF)
+  printf '%s' "$1"
+  if ! IFS= read -r ANSWER < "$TTY_IN"; then
+    ANSWER="q"
+    printf '\n'
+  fi
+}
+
+# ---------- scanning ----------
 
 # Emit "state<TAB>basename<TAB>detail" for each entry matching our extension id.
 scan_dir() {
@@ -409,123 +445,445 @@ scan_dir() {
   return 0
 }
 
-if [ "$ACTION" = "list" ]; then
-  width="$(term_width)"
+# Aggregate status word for a directory: linked | stale | copy | other | unlinked
+dir_status() {
+  local dir="$1" status="unlinked" state _base _detail
+  while IFS="	" read -r state _base _detail; do
+    [ -n "$state" ] || continue
+    case "$state" in
+      linked) status="linked" ;;
+      stale)  [ "$status" = "linked" ] || status="stale" ;;
+      copy)   [ "$status" = "linked" ] || status="copy" ;;
+      other|broken) [ "$status" = "linked" ] || status="other" ;;
+    esac
+  done <<EOF
+$(scan_dir "$dir")
+EOF
+  printf '%s\n' "$status"
+}
 
-  # Pass 1: gather rows as "label<TAB>status<TAB>path" plus notes.
-  rows=""
-  notes=""
-  n_linked=0; n_unlinked=0; n_absent=0; n_attention=0
-  col1=6; col3=9
+# ROWS lines: "label<TAB>status<TAB>dir<TAB>cli"; NOTES lines: "label<TAB>state<TAB>base<TAB>detail"
+ROWS=""
+NOTES=""
+N_LINKED=0; N_UNLINKED=0; N_ABSENT=0; N_ATTENTION=0
 
+collect_rows() {
+  ROWS=""; NOTES=""
+  N_LINKED=0; N_UNLINKED=0; N_ABSENT=0; N_ATTENTION=0
+  local editor label dir status state base detail p
   for editor in $ALL_EDITORS; do
     label="$(label_for "$editor")"
-    dir="$(resolve_dir "$editor")" && exists=1 || exists=0
-    shown_dir="$(abbrev_home "$dir")"
-    status="absent"
-
-    if [ "$exists" -eq 1 ]; then
-      status="unlinked"
-      entries="$(scan_dir "$dir")"
+    if dir="$(resolve_dir "$editor")"; then
+      status="$(dir_status "$dir")"
       while IFS="	" read -r state base detail; do
         [ -n "$state" ] || continue
-        case "$state" in
-          linked) status="linked" ;;
-          stale)  [ "$status" = "linked" ] || status="stale" ;;
-          copy)   [ "$status" = "linked" ] || status="copy" ;;
-          other|broken) [ "$status" = "linked" ] || status="other" ;;
-        esac
-        case "$state" in
-          linked) : ;;
-          *) notes="$notes
-$label	$state	$base	$detail" ;;
-        esac
+        [ "$state" = "linked" ] && continue
+        NOTES="$NOTES
+$label	$state	$base	$detail"
       done <<EOF
-$entries
+$(scan_dir "$dir")
 EOF
+    else
+      status="absent"
     fi
-
     case "$status" in
-      linked)   n_linked=$((n_linked + 1)) ;;
-      unlinked) n_unlinked=$((n_unlinked + 1)) ;;
-      absent)   n_absent=$((n_absent + 1)) ;;
-      *)        n_attention=$((n_attention + 1)) ;;
+      linked)   N_LINKED=$((N_LINKED + 1)) ;;
+      unlinked) N_UNLINKED=$((N_UNLINKED + 1)) ;;
+      absent)   N_ABSENT=$((N_ABSENT + 1)) ;;
+      *)        N_ATTENTION=$((N_ATTENTION + 1)) ;;
     esac
-
-    [ "${#label}" -gt "$col1" ] && col1="${#label}"
-    [ "${#shown_dir}" -gt "$col3" ] && col3="${#shown_dir}"
-    rows="$rows
-$label	$status	$shown_dir"
+    ROWS="$ROWS
+$label	$status	$dir	$(cli_for "$editor")"
   done
 
-  col2=8   # widest status word: "unlinked"
-  # Fit within the terminal: 4 borders + 3 separators of padding = 10 columns.
+  # Any --path targets appear as extra rows.
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    if [ -d "$p" ]; then
+      status="$(dir_status "$p")"
+    else
+      status="absent"
+    fi
+    case "$status" in
+      linked)   N_LINKED=$((N_LINKED + 1)) ;;
+      unlinked) N_UNLINKED=$((N_UNLINKED + 1)) ;;
+      absent)   N_ABSENT=$((N_ABSENT + 1)) ;;
+      *)        N_ATTENTION=$((N_ATTENTION + 1)) ;;
+    esac
+    ROWS="$ROWS
+Custom path	$status	$p	"
+  done <<EOF
+$CUSTOM_PATHS
+EOF
+  return 0
+}
+
+row_field() { # $1 = row number (1-based), $2 = field index (1-4)
+  printf '%s\n' "$ROWS" | sed -n "/./p" | sed -n "${1}p" | cut -f "$2"
+}
+
+row_count() {
+  printf '%s\n' "$ROWS" | sed -n "/./p" | wc -l | tr -d ' '
+}
+
+# ---------- table rendering ----------
+
+status_style() { # $1 = status; sets S_GLYPH, S_COLOR, S_PATH_COLOR
+  case "$1" in
+    linked)   S_GLYPH="$G_OK";   S_COLOR="$C_GREEN";  S_PATH_COLOR="" ;;
+    unlinked) S_GLYPH="$G_OFF";  S_COLOR="$C_DIM";    S_PATH_COLOR="" ;;
+    absent)   S_GLYPH="$G_NONE"; S_COLOR="$C_DIM";    S_PATH_COLOR="$C_DIM" ;;
+    *)        S_GLYPH="$G_WARN"; S_COLOR="$C_YELLOW"; S_PATH_COLOR="" ;;
+  esac
+}
+
+render_table() { # $1 = 1 to number the rows
+  local numbered="${1:-0}" width col1=6 col2=8 col3=9 col0=1 max_col3 n=0
+  local label status dir _cli shown
+
+  width="$(term_width)"
+  while IFS="	" read -r label status dir _cli; do
+    [ -n "$label" ] || continue
+    n=$((n + 1))
+    shown="$(abbrev_home "$dir")"
+    [ "${#label}" -gt "$col1" ] && col1="${#label}"
+    [ "${#shown}" -gt "$col3" ] && col3="${#shown}"
+  done <<EOF
+$ROWS
+EOF
+  [ "${#n}" -gt "$col0" ] && col0="${#n}"
+
   max_col3=$((width - col1 - col2 - 12))
+  [ "$numbered" = "1" ] && max_col3=$((max_col3 - col0 - 3))
   [ "$max_col3" -lt 20 ] && max_col3=20
   [ "$col3" -gt "$max_col3" ] && col3="$max_col3"
 
-  # $1 = left corner, $2 = junction, $3 = right corner
-  rule() {
-    say "  $1$(repeat_char $((col1 + 2)) "$BX_H")$2$(repeat_char $((col2 + 4)) "$BX_H")$2$(repeat_char $((col3 + 2)) "$BX_H")$3"
+  rule() { # $1 left, $2 junction, $3 right
+    local line=""
+    [ "$numbered" = "1" ] && line="$line$(repeat_char $((col0 + 2)) "$BX_H")$2"
+    say "  $1$line$(repeat_char $((col1 + 2)) "$BX_H")$2$(repeat_char $((col2 + 4)) "$BX_H")$2$(repeat_char $((col3 + 2)) "$BX_H")$3"
   }
 
+  local head=""
+  [ "$numbered" = "1" ] && head="$BX_V $(tint "$(pad '#' "$col0")" "$C_DIM") "
+  rule "$BX_TL" "$BX_T" "$BX_TR"
+  say "  $head$BX_V $(tint "$(pad EDITOR "$col1")" "$C_DIM") $BX_V $(tint "$(pad STATUS $((col2 + 2)))" "$C_DIM") $BX_V $(tint "$(pad 'EXTENSIONS DIRECTORY' "$col3")" "$C_DIM") $BX_V"
+  rule "$BX_L" "$BX_X" "$BX_R"
+
+  n=0
+  while IFS="	" read -r label status dir _cli; do
+    [ -n "$label" ] || continue
+    n=$((n + 1))
+    status_style "$status"
+    local num=""
+    [ "$numbered" = "1" ] && num="$BX_V $(tint "$(pad "$n" "$col0")" "$C_CYAN") "
+    say "  $num$BX_V $(pad "$label" "$col1") $BX_V $(tint "$S_GLYPH $(pad "$status" "$col2")" "$S_COLOR") $BX_V $(tint "$(pad "$(truncate_str "$(abbrev_home "$dir")" "$col3")" "$col3")" "$S_PATH_COLOR") $BX_V"
+  done <<EOF
+$ROWS
+EOF
+  rule "$BX_BL" "$BX_B" "$BX_BR"
+}
+
+render_notes() {
+  [ -n "$(printf '%s' "$NOTES" | tr -d '[:space:]')" ] || return 0
+  local label state base detail color word
+  say ""
+  say "  $(tint Notes "$C_BOLD")"
+  while IFS="	" read -r label state base detail; do
+    [ -n "$label" ] || continue
+    case "$state" in
+      stale)  color="$C_YELLOW"; word="stale link" ;;
+      broken) color="$C_RED";    word="broken link" ;;
+      other)  color="$C_YELLOW"; word="foreign link" ;;
+      copy)   color="$C_YELLOW"; word="installed copy" ;;
+      *)      color="";          word="$state" ;;
+    esac
+    say "    $(tint "$(pad "$word" 15)" "$color")$(pad "$label" 20)$(tint "$base $G_ARROW $detail" "$C_DIM")"
+  done <<EOF
+$NOTES
+EOF
+}
+
+render_summary() {
+  local summary sep
+  summary="$(tint "$N_LINKED linked" "$C_GREEN")"
+  sep=" $(tint "$G_SEP" "$C_DIM") "
+  [ "$N_ATTENTION" -gt 0 ] && summary="$summary$sep$(tint "$N_ATTENTION need attention" "$C_YELLOW")"
+  [ "$N_UNLINKED" -gt 0 ] && summary="$summary$sep$N_UNLINKED unlinked"
+  [ "$N_ABSENT" -gt 0 ] && summary="$summary$sep$(tint "$N_ABSENT not installed" "$C_DIM")"
+  say "  $summary"
+}
+
+render_header() {
   say ""
   say "  $(tint "$PUBLISHER.$NAME" "$C_BOLD") $(tint "v$VERSION" "$C_DIM")"
   say "  $(tint "$(abbrev_home "$REPO_DIR")" "$C_DIM")"
   say ""
+}
 
-  rule "$BX_TL" "$BX_T" "$BX_TR"
-  say "  $BX_V $(tint "$(pad EDITOR "$col1")" "$C_DIM") $BX_V $(tint "$(pad STATUS $((col2 + 2)))" "$C_DIM") $BX_V $(tint "$(pad 'EXTENSIONS DIRECTORY' "$col3")" "$C_DIM") $BX_V"
-  rule "$BX_L" "$BX_X" "$BX_R"
+# ---------- build ----------
 
-  while IFS="	" read -r label status shown_dir; do
-    [ -n "$label" ] || continue
-    case "$status" in
-      linked)   glyph="$G_OK";   color="$C_GREEN";  path_color="" ;;
-      unlinked) glyph="$G_OFF";  color="$C_DIM";    path_color="" ;;
-      absent)   glyph="$G_NONE"; color="$C_DIM";    path_color="$C_DIM" ;;
-      *)        glyph="$G_WARN"; color="$C_YELLOW"; path_color="" ;;
-    esac
-    say "  $BX_V $(pad "$label" "$col1") $BX_V $(tint "$glyph $(pad "$status" "$col2")" "$color") $BX_V $(tint "$(pad "$(truncate_str "$shown_dir" "$col3")" "$col3")" "$path_color") $BX_V"
-  done <<EOF
-$rows
-EOF
+BUILT=0
 
-  rule "$BX_BL" "$BX_B" "$BX_BR"
+ensure_build() {
+  [ "$DO_BUILD" -eq 1 ] || {
+    [ -f "$REPO_DIR/dist/extension.js" ] || step "$(tint warning "$C_YELLOW"): dist/extension.js is missing; the editor cannot activate this extension."
+    return 0
+  }
+  [ "$BUILT" -eq 0 ] || return 0
+  if [ "$DRY_RUN" -eq 1 ]; then
+    step "would run: npm run build  (in $REPO_DIR)"
+    BUILT=1
+    return 0
+  fi
+  step "building…"
+  if ( cd "$REPO_DIR" && npm run build >/dev/null 2>&1 ); then
+    BUILT=1
+    step "dist/ built"
+    return 0
+  fi
+  step "$(tint error "$C_RED"): build failed — run 'npm run build' to see why"
+  return 1
+}
 
-  if [ -n "$(printf '%s' "$notes" | tr -d '[:space:]')" ]; then
-    say ""
-    say "  $(tint Notes "$C_BOLD")"
-    while IFS="	" read -r label state base detail; do
-      [ -n "$label" ] || continue
-      case "$state" in
-        stale)  color="$C_YELLOW"; word="stale link" ;;
-        broken) color="$C_RED";    word="broken link" ;;
-        other)  color="$C_YELLOW"; word="foreign link" ;;
-        copy)   color="$C_YELLOW"; word="installed copy" ;;
-        *)      color="";          word="$state" ;;
-      esac
-      say "    $(tint "$(pad "$word" 15)" "$color")$(pad "$label" $((col1 + 2)))$(tint "$base $G_ARROW $detail" "$C_DIM")"
-    done <<EOF
-$notes
-EOF
+# ---------- link / unlink ----------
+
+do_rm()   { if [ "$DRY_RUN" -eq 1 ]; then step "would remove: $1"; else rm -f -- "$1"; fi; }
+do_rmrf() { if [ "$DRY_RUN" -eq 1 ]; then step "would remove tree: $1"; else rm -rf -- "$1"; fi; }
+do_mkdir(){ if [ "$DRY_RUN" -eq 1 ]; then step "would create: $1"; else mkdir -p -- "$1"; fi; }
+
+do_link() {
+  local link="$1"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    step "would link: $link $G_ARROW $REPO_DIR"
+    return 0
+  fi
+  if ln -s -- "$REPO_DIR" "$link" 2>/dev/null; then
+    # MSYS/git-bash silently *copies* unless MSYS=winsymlinks:nativestrict,
+    # which would freeze a stale snapshot instead of tracking the repo.
+    if [ ! -L "$link" ]; then
+      step "$(tint error "$C_RED"): '$link' was created as a copy, not a symlink."
+      step "       Your shell does not support symlinks here. Either:"
+      step "         export MSYS=winsymlinks:nativestrict   (git-bash, then retry)"
+      step "       or create a junction from an elevated cmd.exe:"
+      step "         mklink /J \"$link\" \"$REPO_DIR\""
+      do_rmrf "$link"
+      return 1
+    fi
+    step "$(tint "$G_OK linked" "$C_GREEN") $LINK_NAME $G_ARROW $(tint "$(abbrev_home "$REPO_DIR")" "$C_DIM")"
+    return 0
+  fi
+  step "$(tint error "$C_RED"): could not create symlink at $link"
+  case "$(uname -s 2>/dev/null || echo unknown)" in
+    MINGW*|MSYS*|CYGWIN*)
+      step "       On Windows, symlinks need Developer Mode or an elevated shell."
+      step "       Alternative (cmd.exe as admin):  mklink /J \"$link\" \"$REPO_DIR\""
+      ;;
+    *)
+      step "       Check write permission on $(dirname -- "$link")."
+      ;;
+  esac
+  return 1
+}
+
+# Remove this extension's links (any version) that point at this repo, plus
+# broken links for the same id. Never touches real directories.
+prune_our_links() {
+  local dir="$1" keep="${2:-}" entry base found=0
+  for entry in "$dir"/$ID_GLOB; do
+    [ -L "$entry" ] || continue
+    [ -n "$keep" ] && [ "$entry" = "$keep" ] && continue
+    base="$(basename -- "$entry")"
+    if [ ! -e "$entry" ]; then
+      do_rm "$entry"; step "removed broken link $base"; found=1
+    elif [ "$(resolve_path "$entry")" = "$REPO_DIR" ]; then
+      do_rm "$entry"; step "removed link $base"; found=1
+    else
+      step "left alone $base $G_ARROW $(resolve_path "$entry")"
+    fi
+  done
+  [ "$found" -eq 0 ] && [ -z "$keep" ] && step "nothing to remove"
+  return 0
+}
+
+verify_with_cli() {
+  local cli="$1" dir="$2"
+  [ -n "$cli" ] || return 0
+  [ "$DRY_RUN" -eq 0 ] || return 0
+  command -v "$cli" >/dev/null 2>&1 || return 0
+  if "$cli" --list-extensions --extensions-dir "$dir" 2>/dev/null | grep -qx "$PUBLISHER.$NAME"; then
+    step "$(tint verified "$C_GREEN"): $cli sees $PUBLISHER.$NAME in this directory"
+  else
+    step "$(tint note "$C_YELLOW"): $cli does not list it yet — restart the editor"
+  fi
+}
+
+# link_target_dir <dir> <cli> ; honours CREATE_DIR / FORCE. Returns non-zero on failure.
+link_target_dir() {
+  local dir="$1" cli="${2:-}" link="$1/$LINK_NAME" resolved
+
+  if [ ! -d "$dir" ]; then
+    if [ "$CREATE_DIR" -eq 1 ]; then
+      do_mkdir "$dir"; step "created directory"
+    else
+      step "$(tint skipped "$C_DIM"): directory does not exist (pass --create-dir to create it)"
+      return 1
+    fi
   fi
 
+  ensure_build || return 1
+
+  if [ -L "$link" ]; then
+    if [ -e "$link" ] && [ "$(resolve_path "$link")" = "$REPO_DIR" ]; then
+      step "$(tint "$G_OK already linked" "$C_GREEN") $G_ARROW this repo"
+    else
+      step "replacing existing link ($G_ARROW $(link_target "$link"))"
+      do_rm "$link"
+      do_link "$link" || return 1
+    fi
+  elif [ -e "$link" ]; then
+    if [ "$FORCE" -eq 1 ]; then
+      step "removing real directory (--force): $link"
+      do_rmrf "$link"
+      do_link "$link" || return 1
+    else
+      step "$(tint refused "$C_YELLOW"): $link exists as a real directory (an installed copy?)."
+      step "         Inspect it, then re-run with --force to replace it."
+      return 1
+    fi
+  else
+    do_link "$link" || return 1
+  fi
+
+  prune_our_links "$dir" "$link"
+  verify_with_cli "$cli" "$dir"
+  return 0
+}
+
+unlink_target_dir() {
+  local dir="$1"
+  if [ ! -d "$dir" ]; then
+    step "$(tint skipped "$C_DIM"): directory does not exist"
+    return 0
+  fi
+  prune_our_links "$dir"
+  return 0
+}
+
+# ---------- non-interactive table ----------
+
+if [ "$ACTION" = "list" ]; then
+  collect_rows
+  render_header
+  render_table 0
+  render_notes
   say ""
-  summary="$(tint "$n_linked linked" "$C_GREEN")"
-  sep=" $(tint "$G_SEP" "$C_DIM") "
-  [ "$n_attention" -gt 0 ] && summary="$summary$sep$(tint "$n_attention need attention" "$C_YELLOW")"
-  [ "$n_unlinked" -gt 0 ] && summary="$summary$sep$n_unlinked unlinked"
-  [ "$n_absent" -gt 0 ] && summary="$summary$sep$(tint "$n_absent not installed" "$C_DIM")"
-  say "  $summary"
-  if [ "$n_linked" -eq 0 ]; then
+  render_summary
+  if [ "$N_LINKED" -eq 0 ]; then
     say "  $(tint "Run" "$C_DIM") $(tint "npm run link" "$C_CYAN") $(tint "to symlink this repo into the editors found above." "$C_DIM")"
   fi
   say ""
   exit 0
 fi
 
-# ---------- resolve targets (newline-delimited "dir<TAB>label<TAB>cli") ----------
+# ---------- interactive menu ----------
+
+if [ "$ACTION" = "menu" ]; then
+  while :; do
+    collect_rows
+    total="$(row_count)"
+    render_header
+    render_table 1
+    render_notes
+    say ""
+    render_summary
+    say ""
+    [ "$DRY_RUN" -eq 1 ] && say "  $(tint "dry-run: no changes will be written" "$C_YELLOW")"
+    prompt_read "  Row to change [1-$total] $(tint "$G_SEP" "$C_DIM") (r)efresh $(tint "$G_SEP" "$C_DIM") (q)uit $G_PROMPT "
+
+    case "$ANSWER" in
+      q|Q|quit|exit) say ""; exit 0 ;;
+      r|R|refresh|"") continue ;;
+      *[!0-9]*|"")
+        say ""
+        say "  $(tint "Not a row number: $ANSWER" "$C_YELLOW")"
+        continue ;;
+    esac
+    if [ "$ANSWER" -lt 1 ] || [ "$ANSWER" -gt "$total" ]; then
+      say ""
+      say "  $(tint "Row $ANSWER is out of range (1-$total)" "$C_YELLOW")"
+      continue
+    fi
+
+    sel_label="$(row_field "$ANSWER" 1)"
+    sel_status="$(row_field "$ANSWER" 2)"
+    sel_dir="$(row_field "$ANSWER" 3)"
+    sel_cli="$(row_field "$ANSWER" 4)"
+
+    say ""
+    say "  $(tint "$sel_label" "$C_BOLD")  $(tint "$(abbrev_home "$sel_dir")" "$C_DIM")"
+    status_style "$sel_status"
+    say "  status: $(tint "$S_GLYPH $sel_status" "$S_COLOR")"
+    while IFS="	" read -r state base detail; do
+      [ -n "$state" ] || continue
+      say "          $(tint "$state: $base $G_ARROW $detail" "$C_DIM")"
+    done <<EOF
+$(scan_dir "$sel_dir")
+EOF
+
+    # Describe what each action will do for this row's current state.
+    link_hint="link this repo here"
+    case "$sel_status" in
+      linked)   link_hint="relink (already linked)" ;;
+      stale)    link_hint="link current version, remove the older link" ;;
+      copy)     link_hint="$(tint "replaces the installed copy" "$C_YELLOW")" ;;
+      other)    link_hint="replace the foreign link" ;;
+      absent)   link_hint="create the directory, then link" ;;
+    esac
+
+    say ""
+    prompt_read "  (l)ink $(tint "— $link_hint" "$C_DIM") $(tint "$G_SEP" "$C_DIM") (u)nlink $(tint "$G_SEP" "$C_DIM") (b)ack $G_PROMPT "
+    say ""
+
+    case "$ANSWER" in
+      l|L|link)
+        # Confirm the two risky cases before touching anything. FORCE and
+        # CREATE_DIR are restored afterwards so a "yes" here can never carry
+        # over to a later row.
+        saved_force="$FORCE"; saved_create="$CREATE_DIR"
+        proceed=1
+        if [ "$sel_status" = "copy" ]; then
+          say "  $(tint "$G_WARN $sel_dir/$LINK_NAME is a real directory, not a link." "$C_YELLOW")"
+          say "  $(tint "  Linking will delete it. If an editor installed it, it can be reinstalled." "$C_DIM")"
+          prompt_read "  Delete it and link? [y/N] $G_PROMPT "
+          case "$ANSWER" in y|Y|yes) FORCE=1 ;; *) proceed=0 ;; esac
+          say ""
+        fi
+        if [ "$proceed" -eq 1 ] && [ ! -d "$sel_dir" ]; then
+          prompt_read "  Directory does not exist. Create it? [y/N] $G_PROMPT "
+          case "$ANSWER" in y|Y|yes) CREATE_DIR=1 ;; *) proceed=0 ;; esac
+          say ""
+        fi
+        if [ "$proceed" -eq 1 ]; then
+          say "  $(tint "$sel_label" "$C_BOLD")"
+          link_target_dir "$sel_dir" "$sel_cli" || true
+        else
+          say "  $(tint "cancelled" "$C_DIM")"
+        fi
+        FORCE="$saved_force"; CREATE_DIR="$saved_create"
+        ;;
+      u|U|unlink)
+        say "  $(tint "$sel_label" "$C_BOLD")"
+        unlink_target_dir "$sel_dir"
+        ;;
+      b|B|back|"") say "  $(tint "back" "$C_DIM")" ;;
+      q|Q|quit|exit) say ""; exit 0 ;;
+      *) say "  $(tint "Unknown choice: $ANSWER" "$C_YELLOW")" ;;
+    esac
+  done
+fi
+
+# ---------- batch install / uninstall ----------
 
 TARGETS=""
 
@@ -566,148 +924,15 @@ if [ -z "$(printf '%s' "$TARGETS" | tr -d '[:space:]')" ]; then
   exit 1
 fi
 
-# ---------- build ----------
-
-if [ "$ACTION" = "install" ]; then
-  if [ "$DO_BUILD" -eq 1 ]; then
-    say "Building extension…"
-    if [ "$DRY_RUN" -eq 1 ]; then
-      step "would run: npm run build  (in $REPO_DIR)"
-    else
-      ( cd "$REPO_DIR" && npm run build >/dev/null ) || { echo "error: build failed" >&2; exit 1; }
-      step "dist/ built"
-    fi
-  elif [ ! -f "$REPO_DIR/dist/extension.js" ]; then
-    echo "warning: dist/extension.js is missing and --no-build was given;" >&2
-    echo "         the editor will fail to activate this extension." >&2
-  fi
-  say ""
-fi
-
-# ---------- link helpers ----------
-
-do_rm()  { if [ "$DRY_RUN" -eq 1 ]; then step "would remove: $1"; else rm -f -- "$1"; fi; }
-do_rmrf(){ if [ "$DRY_RUN" -eq 1 ]; then step "would remove tree: $1"; else rm -rf -- "$1"; fi; }
-do_mkdir(){ if [ "$DRY_RUN" -eq 1 ]; then step "would create: $1"; else mkdir -p -- "$1"; fi; }
-
-do_link() {
-  local link="$1"
-  if [ "$DRY_RUN" -eq 1 ]; then
-    step "would link: $link -> $REPO_DIR"
-    return 0
-  fi
-  if ln -s -- "$REPO_DIR" "$link" 2>/dev/null; then
-    # MSYS/git-bash silently *copies* unless MSYS=winsymlinks:nativestrict,
-    # which would freeze a stale snapshot instead of tracking the repo.
-    if [ ! -L "$link" ]; then
-      step "$(tint "error" "$C_RED"): '$link' was created as a copy, not a symlink."
-      step "       Your shell does not support symlinks here. Either:"
-      step "         export MSYS=winsymlinks:nativestrict   (git-bash, then retry)"
-      step "       or create a junction from an elevated cmd.exe:"
-      step "         mklink /J \"$link\" \"$REPO_DIR\""
-      do_rmrf "$link"
-      return 1
-    fi
-    step "$(tint "$G_OK linked" "$C_GREEN") $LINK_NAME $G_ARROW $(tint "$REPO_DIR" "$C_DIM")"
-    return 0
-  fi
-  step "$(tint "error" "$C_RED"): could not create symlink at $link"
-  case "$(uname -s 2>/dev/null || echo unknown)" in
-    MINGW*|MSYS*|CYGWIN*)
-      step "       On Windows, symlinks need Developer Mode or an elevated shell."
-      step "       Alternative (cmd.exe as admin):"
-      step "         mklink /J \"$link\" \"$REPO_DIR\""
-      ;;
-    *)
-      step "       Check write permission on $(dirname -- "$link")."
-      ;;
-  esac
-  return 1
-}
-
-# Remove this extension's links (any version) that point at this repo,
-# plus broken links for the same id. Never touches real directories.
-prune_our_links() {
-  local dir="$1" keep="${2:-}" entry base
-  for entry in "$dir"/$ID_GLOB; do
-    [ -L "$entry" ] || continue
-    [ -n "$keep" ] && [ "$entry" = "$keep" ] && continue
-    base="$(basename -- "$entry")"
-    if [ ! -e "$entry" ]; then
-      do_rm "$entry"
-      step "removed broken link $base"
-    elif [ "$(resolve_path "$entry")" = "$REPO_DIR" ]; then
-      do_rm "$entry"
-      step "removed link $base"
-    else
-      step "left alone $base -> $(resolve_path "$entry")"
-    fi
-  done
-  return 0
-}
-
-# ---------- install / uninstall ----------
-
 failures=0
-
+say ""
 while IFS="	" read -r dir label cli; do
   [ -n "$dir" ] || continue
-  link="$dir/$LINK_NAME"
   say "$(tint "$label" "$C_BOLD")  $(tint "$(abbrev_home "$dir")" "$C_DIM")"
-
-  if [ ! -d "$dir" ]; then
-    if [ "$CREATE_DIR" -eq 1 ]; then
-      do_mkdir "$dir"
-      step "created directory"
-    else
-      step "$(tint "skipped" "$C_DIM"): directory does not exist (pass --create-dir to create it)"
-      failures=$((failures + 1))
-      say ""
-      continue
-    fi
-  fi
-
   if [ "$ACTION" = "uninstall" ]; then
-    prune_our_links "$dir"
-    say ""
-    continue
-  fi
-
-  if [ -L "$link" ]; then
-    if [ -e "$link" ] && [ "$(resolve_path "$link")" = "$REPO_DIR" ]; then
-      step "$(tint "$G_OK already linked" "$C_GREEN") $G_ARROW this repo"
-    else
-      step "replacing existing link (-> $(link_target "$link"))"
-      do_rm "$link"
-      do_link "$link" || failures=$((failures + 1))
-    fi
-  elif [ -e "$link" ]; then
-    # A real directory: most likely a packaged/marketplace copy of the same id.
-    if [ "$FORCE" -eq 1 ]; then
-      step "removing real directory (--force): $link"
-      do_rmrf "$link"
-      do_link "$link" || failures=$((failures + 1))
-    else
-      step "$(tint "refused" "$C_YELLOW"): $link exists as a real directory (an installed copy?)."
-      step "         Inspect it, then re-run with --force to replace it."
-      failures=$((failures + 1))
-      say ""
-      continue
-    fi
+    unlink_target_dir "$dir"
   else
-    do_link "$link" || failures=$((failures + 1))
-  fi
-
-  # Drop links from older versions so the editor cannot load two copies.
-  prune_our_links "$dir" "$link"
-
-  # Verify against the directory we actually linked into, not the CLI default.
-  if [ -n "$cli" ] && [ "$DRY_RUN" -eq 0 ] && command -v "$cli" >/dev/null 2>&1; then
-    if "$cli" --list-extensions --extensions-dir "$dir" 2>/dev/null | grep -qx "$PUBLISHER.$NAME"; then
-      step "$(tint "verified" "$C_GREEN"): $cli sees $PUBLISHER.$NAME in this directory"
-    else
-      step "$(tint "note" "$C_YELLOW"): $cli does not list it yet — restart the editor"
-    fi
+    link_target_dir "$dir" "$cli" || failures=$((failures + 1))
   fi
   say ""
 done <<EOF
