@@ -568,7 +568,7 @@ function Invoke-BuildOnce {
         }
         & $npm.Source 'run' 'build' *> $null
         if ($LASTEXITCODE -ne 0) {
-            Write-Step ((Get-Tinted 'error' $script:Style.Red) + ": build failed — run 'npm run build' to see why")
+            Write-Step ((Get-Tinted 'error' $script:Style.Red) + ": build failed - run 'npm run build' to see why")
             return $false
         }
     } finally {
@@ -616,7 +616,7 @@ function New-ExtensionLink([string] $link) {
         } catch {
             $lastError = $_.Exception.Message
             if ($kind -eq 'SymbolicLink' -and $kinds.Count -gt 1) {
-                Write-Step (Get-Tinted "symlink not permitted here — falling back to a junction" $script:Style.Dim)
+                Write-Step (Get-Tinted "symlink not permitted here - falling back to a junction" $script:Style.Dim)
             }
         }
     }
@@ -652,7 +652,7 @@ function Test-CliSees([string] $cli, [string] $dir) {
         if ($listed -and ($listed -contains $ExtId)) {
             Write-Step ((Get-Tinted 'verified' $script:Style.Green) + ": $cli sees $ExtId in this directory")
         } else {
-            Write-Step ((Get-Tinted 'note' $script:Style.Yellow) + ": $cli does not list it yet — restart the editor")
+            Write-Step ((Get-Tinted 'note' $script:Style.Yellow) + ": $cli does not list it yet - restart the editor")
         }
     } catch { }
 }
@@ -782,7 +782,7 @@ function Invoke-Menu {
         }
 
         Write-Line ''
-        $choice = Read-Answer ("  (l)ink " + (Get-Tinted "— $hint" $script:Style.Dim) + " $sep (u)nlink $sep (b)ack $($script:Style.Prompt) ")
+        $choice = Read-Answer ("  (l)ink " + (Get-Tinted "- $hint" $script:Style.Dim) + " $sep (u)nlink $sep (b)ack $($script:Style.Prompt) ")
         Write-Line ''
 
         if ($choice -in @('l', 'L', 'link')) {
