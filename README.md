@@ -64,3 +64,50 @@ npm run watch     # esbuild watch
 npm test          # vitest on the pure modules (resolver, query, config merge)
 npm run package   # typecheck + build + .vsix
 ```
+
+### Install locally via symlink
+
+`scripts/install-link.sh` builds the extension and symlinks this repo into your
+editor's extensions directory, so `Developer: Reload Window` picks up each
+rebuild without repackaging. Pair it with `npm run watch` for a fast loop.
+
+```bash
+npm run link                        # every supported editor found on this machine
+npm run link -- --vscode            # VS Code
+npm run link -- --cursor            # Cursor
+npm run link -- --antigravity       # Antigravity
+npm run link -- --vscodium --windsurf --vscode-insiders
+npm run link -- --path /some/other/extensions   # any other location
+npm run links                       # show link status everywhere
+npm run unlink                      # remove the symlinks again
+```
+
+`npm run links` prints a status table — one row per editor with its extensions
+directory, colored by state (`linked`, `unlinked`, `stale`, `copy`, `other`,
+`absent`), plus a Notes section for anything that needs attention:
+
+```
+  ╭──────────────────┬────────────┬───────────────────────────────╮
+  │ EDITOR           │ STATUS     │ EXTENSIONS DIRECTORY          │
+  ├──────────────────┼────────────┼───────────────────────────────┤
+  │ VS Code          │ ● linked   │ ~/.vscode/extensions          │
+  │ Cursor           │ ▲ stale    │ ~/.cursor/extensions          │
+  │ Antigravity      │ · absent   │ ~/.antigravity/extensions     │
+  ╰──────────────────┴────────────┴───────────────────────────────╯
+```
+
+Useful flags: `--all` (every known editor), `--detected` (only ones already
+present), `--create-dir` (create a missing extensions directory, e.g. before an
+editor's first run), `--force` (replace a real directory left by a packaged
+install), `--no-build`, and `-n/--dry-run`. Output styling adapts to the
+terminal: color is disabled when piped, when `$NO_COLOR` is set, or with
+`--no-color`; box-drawing glyphs fall back to ASCII on non-UTF-8 locales or with
+`--ascii`; the table narrows to fit `$COLUMNS`.
+
+Portability: works on Linux, macOS (including stock bash 3.2), and Windows
+git-bash; it probes the canonical `~/.<editor>/extensions` paths plus
+remote/WSL server directories (`~/.vscode-server/extensions`, …), Linux Flatpak
+sandboxes, and `$VSCODE_EXTENSIONS` (which, when set, wins outright). It never
+deletes anything it did not create: symlinks pointing elsewhere are left alone,
+real directories require `--force`, and links from older versions of this
+extension are pruned so the editor cannot load two copies.

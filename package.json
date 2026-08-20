@@ -21,7 +21,10 @@
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "package": "npm run typecheck && npm run build && vsce package --no-dependencies"
+    "package": "npm run typecheck && npm run build && vsce package --no-dependencies",
+    "link": "bash scripts/install-link.sh",
+    "unlink": "bash scripts/install-link.sh --uninstall --all",
+    "links": "bash scripts/install-link.sh --list"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
