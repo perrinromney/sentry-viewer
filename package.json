@@ -25,7 +25,8 @@
     "link": "node scripts/run-link.mjs --install",
     "unlink": "node scripts/run-link.mjs --uninstall --all",
     "links": "node scripts/run-link.mjs --list",
-    "links:list": "node scripts/run-link.mjs --plain"
+    "links:list": "node scripts/run-link.mjs --plain",
+    "doctor": "node scripts/run-link.mjs --cli-check"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

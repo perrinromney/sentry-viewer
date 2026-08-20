@@ -301,6 +301,7 @@ FORCE=0
 DRY_RUN=0
 DETECTED_ONLY=0
 INTERACTIVE="auto"   # auto | never
+CLI_CHECK=1          # sentry-cli health/token advisory after linking
 
 usage() {
   cat <<EOF
@@ -343,7 +344,14 @@ OPTIONS
   --color WHEN             auto (default), always, or never
   --no-color               same as --color never (also honours \$NO_COLOR)
   --ascii                  plain ASCII table instead of box-drawing glyphs
+  --no-cli-check           skip the sentry-cli health/token advisory after linking
   -h, --help               this help
+
+CHECKS
+  --cli-check, --doctor    report sentry-cli health and whether a token is on
+                           file, without touching any links. Exits non-zero when
+                           the CLI is missing/broken or no token was found, so it
+                           is usable as a scripted precondition.
 
 EXAMPLES
   npm run links                     # interactive picker
@@ -389,6 +397,8 @@ $(expand_tilde "${1#--path=}")"
     --color=*)     COLOR_MODE="${1#--color=}" ;;
     --no-color)    COLOR_MODE="never" ;;
     --ascii)       GLYPH_MODE="ascii" ;;
+    --no-cli-check|--skip-cli-check) CLI_CHECK=0 ;;
+    --cli-check|--check-cli|--doctor) ACTION="clicheck" ;;
     -h|--help)     usage; exit 0 ;;
     *) echo "error: unknown option '$1' (try --help)" >&2; exit 1 ;;
   esac
@@ -770,6 +780,158 @@ unlink_target_dir() {
   return 0
 }
 
+# ---------- sentry-cli health / token advisory ----------
+#
+# Advisory only: the extension talks to Sentry itself and keeps its own token in
+# SecretStorage or .sentry_viewer/local.json. sentry-cli is a convenience — it
+# is where the extension's one-time token import reads from, and what uploads
+# sourcemaps so production stack frames resolve to real files. Nothing here can
+# fail a link.
+
+# Print where a sentry-cli token lives. Never prints the token itself.
+sentry_token_source() {
+  if [ -n "${SENTRY_AUTH_TOKEN:-}" ]; then
+    printf '%s\n' 'SENTRY_AUTH_TOKEN environment variable'
+    return 0
+  fi
+  local file
+  for file in "./.sentryclirc" "$HOME/.sentryclirc"; do
+    if [ -f "$file" ] && grep -qE '^[[:space:]]*token[[:space:]]*=[[:space:]]*[^[:space:]]' "$file" 2>/dev/null; then
+      abbrev_home "$file"; printf '\n'
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Offer the verified install channels for this platform, running one on request.
+offer_cli_install() {
+  local os labels=() commands=() i n
+  os="$(uname -s 2>/dev/null || echo unknown)"
+
+  # npm first: this repo already needs Node, so it always applies.
+  labels+=("npm install -g @sentry/cli"); commands+=("npm install -g @sentry/cli")
+  case "$os" in
+    Darwin)
+      if command -v brew >/dev/null 2>&1; then
+        labels+=("brew install getsentry/tools/sentry-cli"); commands+=("brew install getsentry/tools/sentry-cli")
+      fi
+      labels+=("curl -sL https://sentry.io/get-cli/ | sh"); commands+=("curl -sL https://sentry.io/get-cli/ | sh")
+      ;;
+    MINGW*|MSYS*|CYGWIN*)
+      if command -v scoop >/dev/null 2>&1; then
+        labels+=("scoop install sentry-cli"); commands+=("scoop install sentry-cli")
+      fi
+      ;;
+    *)
+      labels+=("curl -sL https://sentry.io/get-cli/ | sh"); commands+=("curl -sL https://sentry.io/get-cli/ | sh")
+      ;;
+  esac
+
+  step "install with:"
+  n=1
+  for i in "${labels[@]}"; do
+    step "  $(tint "$n)" "$C_CYAN") $i"
+    n=$((n + 1))
+  done
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    step "$(tint "dry-run: not offering to install" "$C_DIM")"
+    return 0
+  fi
+  if [ -z "$TTY_IN" ] || [ ! -t 1 ]; then
+    step "$(tint "run one of the above, then re-run this command" "$C_DIM")"
+    return 0
+  fi
+
+  local total="${#labels[@]}"
+  prompt_read "  Install now? [1-$total, or N to skip] $G_PROMPT "
+  case "$ANSWER" in
+    ''|n|N|no|q|Q) step "$(tint skipped "$C_DIM")"; return 0 ;;
+    *[!0-9]*) step "$(tint "not a choice: $ANSWER" "$C_YELLOW")"; return 0 ;;
+  esac
+  if [ "$ANSWER" -lt 1 ] || [ "$ANSWER" -gt "$total" ]; then
+    step "$(tint "out of range: $ANSWER" "$C_YELLOW")"
+    return 0
+  fi
+
+  local chosen="${commands[$((ANSWER - 1))]}"
+  say ""
+  step "running: $chosen"
+  say ""
+  if bash -c "$chosen"; then
+    say ""
+    if command -v sentry-cli >/dev/null 2>&1; then
+      step "$(tint "$G_OK installed" "$C_GREEN") $(sentry-cli --version 2>/dev/null || echo 'sentry-cli')"
+    else
+      step "$(tint note "$C_YELLOW"): install reported success but sentry-cli is not on PATH yet."
+      step "       Open a new terminal, or add npm's global bin directory to PATH."
+    fi
+  else
+    say ""
+    step "$(tint "install failed" "$C_YELLOW") — try another option above."
+    case "$chosen" in
+      npm*) step "       A global npm install may need sudo, or set a user prefix:"
+            step "         npm config set prefix ~/.local && npm install -g @sentry/cli" ;;
+      curl*) step "       The official installer writes to /usr/local/bin and may need sudo." ;;
+    esac
+  fi
+  return 0
+}
+
+# Returns the number of problems found (0 = healthy CLI and a token on file).
+# Link paths ignore the status; the standalone --cli-check action propagates it.
+check_sentry_cli() {
+  [ "$CLI_CHECK" -eq 1 ] || return 0
+  local issues=0
+  say ""
+  say "  $(tint "Sentry CLI" "$C_BOLD") $(tint "(optional — token import and sourcemap uploads)" "$C_DIM")"
+
+  local cli_path version
+  cli_path="$(command -v sentry-cli 2>/dev/null || true)"
+  if [ -n "$cli_path" ]; then
+    if version="$(sentry-cli --version 2>/dev/null)"; then
+      step "$(tint "$G_OK" "$C_GREEN") $version  $(tint "$cli_path" "$C_DIM")"
+    else
+      step "$(tint "$G_WARN" "$C_YELLOW") found at $cli_path but 'sentry-cli --version' failed — the binary looks broken"
+      issues=$((issues + 1))
+    fi
+  else
+    step "$(tint "$G_WARN not installed" "$C_YELLOW")"
+    offer_cli_install
+    cli_path="$(command -v sentry-cli 2>/dev/null || true)"
+    [ -n "$cli_path" ] || issues=$((issues + 1))
+  fi
+
+  local source
+  if source="$(sentry_token_source)"; then
+    step "$(tint "$G_OK" "$C_GREEN") auth token on file $(tint "($source)" "$C_DIM")"
+    step "$(tint "the extension can import it on first run: Sentry: Sign In" "$C_DIM")"
+  else
+    step "$(tint "$G_WARN no auth token on file" "$C_YELLOW")"
+    if [ -n "$cli_path" ]; then
+      step "       Create one at $(tint "https://sentry.io/settings/account/api/auth-tokens/" "$C_CYAN") then run:"
+      step "         sentry-cli login"
+    else
+      step "       Create one at $(tint "https://sentry.io/settings/account/api/auth-tokens/" "$C_CYAN")"
+    fi
+    step "$(tint "or paste one straight into the extension: Sentry: Sign In" "$C_DIM")"
+    issues=$((issues + 1))
+  fi
+  return "$issues"
+}
+
+# ---------- standalone health check (touches no links) ----------
+
+if [ "$ACTION" = "clicheck" ]; then
+  CLI_CHECK=1     # this action *is* the check, so --no-cli-check cannot mute it
+  render_header
+  status=0
+  check_sentry_cli || status=$?
+  say ""
+  exit "$status"
+fi
+
 # ---------- non-interactive table ----------
 
 if [ "$ACTION" = "list" ]; then
@@ -799,10 +961,11 @@ if [ "$ACTION" = "menu" ]; then
     render_summary
     say ""
     [ "$DRY_RUN" -eq 1 ] && say "  $(tint "dry-run: no changes will be written" "$C_YELLOW")"
-    prompt_read "  Row to change [1-$total] $(tint "$G_SEP" "$C_DIM") (r)efresh $(tint "$G_SEP" "$C_DIM") (q)uit $G_PROMPT "
+    prompt_read "  Row to change [1-$total] $(tint "$G_SEP" "$C_DIM") (c)heck sentry-cli $(tint "$G_SEP" "$C_DIM") (r)efresh $(tint "$G_SEP" "$C_DIM") (q)uit $G_PROMPT "
 
     case "$ANSWER" in
       q|Q|quit|exit) say ""; exit 0 ;;
+      c|C|check) CLI_CHECK=1; check_sentry_cli || true; continue ;;
       r|R|refresh|"") continue ;;
       *[!0-9]*|"")
         say ""
@@ -866,7 +1029,9 @@ EOF
         fi
         if [ "$proceed" -eq 1 ]; then
           say "  $(tint "$sel_label" "$C_BOLD")"
-          link_target_dir "$sel_dir" "$sel_cli" || true
+          if link_target_dir "$sel_dir" "$sel_cli"; then
+            check_sentry_cli || true
+          fi
         else
           say "  $(tint "cancelled" "$C_DIM")"
         fi
@@ -942,6 +1107,10 @@ EOF
 if [ "$ACTION" = "uninstall" ]; then
   say "Done. Reload or restart your editor to drop the extension."
 else
+  if [ "$failures" -lt "$(printf '%s\n' "$TARGETS" | sed -n '/./p' | wc -l | tr -d ' ')" ]; then
+    check_sentry_cli || true
+  fi
+  say ""
   say "Done. Run 'Developer: Reload Window' in each editor to load the current build."
   say "Tip: 'npm run watch' + reload gives a fast edit/test loop."
 fi

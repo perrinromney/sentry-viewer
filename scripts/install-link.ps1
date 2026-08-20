@@ -57,6 +57,7 @@ $Opt = @{
     ColorMode   = 'auto'      # auto | always | never
     GlyphMode   = 'auto'      # auto | unicode | ascii
     Junction    = $false      # force junctions instead of symlinks
+    CliCheck    = $true       # sentry-cli health/token advisory after linking
 }
 
 $AllEditors = @('vscode', 'vscode-insiders', 'vscodium', 'cursor', 'antigravity', 'windsurf')
@@ -92,7 +93,14 @@ OPTIONS
   --color WHEN          auto (default), always, or never
   --no-color            same as --color never (also honours `$env:NO_COLOR)
   --ascii               plain ASCII table instead of box-drawing glyphs
+  --no-cli-check        skip the sentry-cli health/token advisory after linking
   -h, --help            this help
+
+CHECKS
+  --cli-check, --doctor report sentry-cli health and whether a token is on file,
+                        without touching any links. Exits non-zero when the CLI
+                        is missing/broken or no token was found, so it is usable
+                        as a scripted precondition.
 
 PowerShell-style switches (-Cursor, -All, -DryRun, ...) are accepted too.
 "@ | Write-Host
@@ -149,6 +157,14 @@ while ($i -lt $argv.Count) {
         'nocolor'          { $Opt.ColorMode = 'never' }
         'no-color'         { $Opt.ColorMode = 'never' }
         'ascii'            { $Opt.GlyphMode = 'ascii' }
+        'noclicheck'       { $Opt.CliCheck = $false }
+        'no-cli-check'     { $Opt.CliCheck = $false }
+        'skipclicheck'     { $Opt.CliCheck = $false }
+        'clicheck'         { $Opt.Action = 'clicheck' }
+        'cli-check'        { $Opt.Action = 'clicheck' }
+        'checkcli'         { $Opt.Action = 'clicheck' }
+        'check-cli'        { $Opt.Action = 'clicheck' }
+        'doctor'           { $Opt.Action = 'clicheck' }
         'help'             { Show-Usage; exit 0 }
         'h'                { Show-Usage; exit 0 }
         default {
@@ -711,6 +727,183 @@ function Invoke-UnlinkTarget([string] $dir) {
     Remove-OurLinks $dir
 }
 
+# ---------- sentry-cli health / token advisory ----------
+#
+# Advisory only: the extension talks to Sentry itself and keeps its own token in
+# SecretStorage or .sentry_viewer/local.json. sentry-cli is a convenience — it is
+# where the extension's one-time token import reads from, and what uploads
+# sourcemaps so production stack frames resolve to real files. Nothing here can
+# fail a link.
+
+function Get-PlatformKind {
+    # $IsWindows/$IsMacOS only exist in PowerShell 6+; 5.1 is Windows-only.
+    if (Get-Variable -Name 'IsWindows' -ErrorAction SilentlyContinue) {
+        if ($IsWindows) { return 'windows' }
+        if ($IsMacOS)   { return 'macos' }
+        return 'linux'
+    }
+    return 'windows'
+}
+
+# Where a sentry-cli token lives. Never returns the token itself.
+function Get-SentryTokenSource {
+    if ($env:SENTRY_AUTH_TOKEN) { return 'SENTRY_AUTH_TOKEN environment variable' }
+    $candidates = New-Object System.Collections.ArrayList
+    [void]$candidates.Add((Join-Path (Get-Location).Path '.sentryclirc'))
+    foreach ($root in Get-HomeRoots) { [void]$candidates.Add((Join-Path $root '.sentryclirc')) }
+    foreach ($file in $candidates) {
+        if (Test-Path -LiteralPath $file -PathType Leaf) {
+            try {
+                foreach ($line in (Get-Content -LiteralPath $file -ErrorAction Stop)) {
+                    if ($line -match '^\s*token\s*=\s*\S') { return (Get-AbbreviatedPath $file) }
+                }
+            } catch { }
+        }
+    }
+    return ''
+}
+
+function Get-CliInstallOptions {
+    $options = New-Object System.Collections.ArrayList
+    # npm first: this repo already needs Node, so it always applies.
+    [void]$options.Add([pscustomobject]@{ Label = 'npm install -g @sentry/cli'; Exe = 'npm'; Args = @('install', '-g', '@sentry/cli') })
+    switch (Get-PlatformKind) {
+        'windows' {
+            if (Get-Command scoop -ErrorAction SilentlyContinue) {
+                [void]$options.Add([pscustomobject]@{ Label = 'scoop install sentry-cli'; Exe = 'scoop'; Args = @('install', 'sentry-cli') })
+            }
+        }
+        'macos' {
+            if (Get-Command brew -ErrorAction SilentlyContinue) {
+                [void]$options.Add([pscustomobject]@{ Label = 'brew install getsentry/tools/sentry-cli'; Exe = 'brew'; Args = @('install', 'getsentry/tools/sentry-cli') })
+            }
+            [void]$options.Add([pscustomobject]@{ Label = 'curl -sL https://sentry.io/get-cli/ | sh'; Exe = 'sh'; Args = @('-c', 'curl -sL https://sentry.io/get-cli/ | sh') })
+        }
+        default {
+            [void]$options.Add([pscustomobject]@{ Label = 'curl -sL https://sentry.io/get-cli/ | sh'; Exe = 'sh'; Args = @('-c', 'curl -sL https://sentry.io/get-cli/ | sh') })
+        }
+    }
+    return $options
+}
+
+function Invoke-CliInstallOffer {
+    $options = Get-CliInstallOptions
+    Write-Step 'install with:'
+    $n = 1
+    foreach ($option in $options) {
+        Write-Step ("  " + (Get-Tinted "$n)" $script:Style.Cyan) + " " + $option.Label)
+        $n++
+    }
+
+    if ($Opt.DryRun) {
+        Write-Step (Get-Tinted 'dry-run: not offering to install' $script:Style.Dim)
+        return
+    }
+    if (-not (Test-Interactive)) {
+        Write-Step (Get-Tinted 'run one of the above, then re-run this command' $script:Style.Dim)
+        return
+    }
+
+    $total = $options.Count
+    $answer = Read-Answer "  Install now? [1-$total, or N to skip] $($script:Style.Prompt) "
+    if ($answer -in @('', 'n', 'N', 'no', 'q', 'Q')) {
+        Write-Step (Get-Tinted 'skipped' $script:Style.Dim)
+        return
+    }
+    if ($answer -notmatch '^\d+$') {
+        Write-Step (Get-Tinted "not a choice: $answer" $script:Style.Yellow)
+        return
+    }
+    $index = [int]$answer
+    if ($index -lt 1 -or $index -gt $total) {
+        Write-Step (Get-Tinted "out of range: $answer" $script:Style.Yellow)
+        return
+    }
+
+    $chosen = $options[$index - 1]
+    Write-Line ''
+    Write-Step "running: $($chosen.Label)"
+    Write-Line ''
+    $exe = Get-Command $chosen.Exe -ErrorAction SilentlyContinue
+    if (-not $exe) {
+        Write-Step ((Get-Tinted 'error' $script:Style.Red) + ": $($chosen.Exe) is not on PATH")
+        return
+    }
+    $global:LASTEXITCODE = 0
+    & $exe.Source @($chosen.Args)
+    $code = $LASTEXITCODE
+    Write-Line ''
+    if ($code -eq 0) {
+        $found = Get-Command sentry-cli -ErrorAction SilentlyContinue
+        if ($found) {
+            $version = ''
+            try { $version = (& $found.Source '--version' 2>$null | Select-Object -First 1) } catch { }
+            if (-not $version) { $version = 'sentry-cli' }
+            Write-Step ((Get-Tinted "$($script:Style.Ok) installed" $script:Style.Green) + " $version")
+        } else {
+            Write-Step ((Get-Tinted 'note' $script:Style.Yellow) + ': install reported success but sentry-cli is not on PATH yet.')
+            Write-Step '       Open a new terminal, or add the global bin directory to PATH.'
+        }
+    } else {
+        Write-Step ((Get-Tinted 'install failed' $script:Style.Yellow) + ' — try another option above.')
+        if ($chosen.Exe -eq 'npm') {
+            Write-Step '       A global npm install may need elevation, or set a user prefix:'
+            Write-Step '         npm config set prefix ~/.local ; npm install -g @sentry/cli'
+        }
+    }
+}
+
+# Returns the number of problems found (0 = healthy CLI and a token on file).
+# Link paths discard the value; the standalone --cli-check action propagates it.
+function Test-SentryCli {
+    if (-not $Opt.CliCheck) { return 0 }
+    $issues = 0
+    Write-Line ''
+    Write-Line ("  " + (Get-Tinted 'Sentry CLI' $script:Style.Bold) + " " +
+                (Get-Tinted '(optional — token import and sourcemap uploads)' $script:Style.Dim))
+
+    $cli = Get-Command sentry-cli -ErrorAction SilentlyContinue
+    if ($cli) {
+        $version = ''
+        $ok = $true
+        try {
+            $global:LASTEXITCODE = 0
+            $version = (& $cli.Source '--version' 2>$null | Select-Object -First 1)
+            if ($LASTEXITCODE -ne 0) { $ok = $false }
+        } catch { $ok = $false }
+        if ($ok -and $version) {
+            Write-Step ((Get-Tinted $script:Style.Ok $script:Style.Green) + " $version  " + (Get-Tinted $cli.Source $script:Style.Dim))
+        } else {
+            Write-Step ((Get-Tinted $script:Style.Warn $script:Style.Yellow) +
+                        " found at $($cli.Source) but 'sentry-cli --version' failed — the binary looks broken")
+            $issues++
+        }
+    } else {
+        Write-Step (Get-Tinted "$($script:Style.Warn) not installed" $script:Style.Yellow)
+        Invoke-CliInstallOffer
+        $cli = Get-Command sentry-cli -ErrorAction SilentlyContinue
+        if (-not $cli) { $issues++ }
+    }
+
+    $source = Get-SentryTokenSource
+    if ($source) {
+        Write-Step ((Get-Tinted $script:Style.Ok $script:Style.Green) + " auth token on file " + (Get-Tinted "($source)" $script:Style.Dim))
+        Write-Step (Get-Tinted 'the extension can import it on first run: Sentry: Sign In' $script:Style.Dim)
+    } else {
+        Write-Step (Get-Tinted "$($script:Style.Warn) no auth token on file" $script:Style.Yellow)
+        $tokenUrl = Get-Tinted 'https://sentry.io/settings/account/api/auth-tokens/' $script:Style.Cyan
+        if ($cli) {
+            Write-Step "       Create one at $tokenUrl then run:"
+            Write-Step '         sentry-cli login'
+        } else {
+            Write-Step "       Create one at $tokenUrl"
+        }
+        Write-Step (Get-Tinted 'or paste one straight into the extension: Sentry: Sign In' $script:Style.Dim)
+        $issues++
+    }
+    return $issues
+}
+
 # ---------- interactive menu ----------
 
 function Test-Interactive {
@@ -747,9 +940,14 @@ function Invoke-Menu {
         if ($Opt.DryRun) { Write-Line ("  " + (Get-Tinted 'dry-run: no changes will be written' $script:Style.Yellow)) }
 
         $sep = Get-Tinted $script:Style.Sep $script:Style.Dim
-        $answer = Read-Answer ("  Row to change [1-$total] $sep (r)efresh $sep (q)uit $($script:Style.Prompt) ")
+        $answer = Read-Answer ("  Row to change [1-$total] $sep (c)heck sentry-cli $sep (r)efresh $sep (q)uit $($script:Style.Prompt) ")
 
         if ($answer -in @('q', 'Q', 'quit', 'exit')) { Write-Line ''; return 0 }
+        if ($answer -in @('c', 'C', 'check')) {
+            $Opt.CliCheck = $true
+            [void](Test-SentryCli)
+            continue
+        }
         if ($answer -in @('', 'r', 'R', 'refresh')) { continue }
         if ($answer -notmatch '^\d+$') {
             Write-Line ''
@@ -805,7 +1003,7 @@ function Invoke-Menu {
             }
             if ($proceed) {
                 Write-Line ("  " + (Get-Tinted $row.Label $script:Style.Bold))
-                [void](Invoke-LinkTarget $row.Dir $row.Cli)
+                if (Invoke-LinkTarget $row.Dir $row.Cli) { [void](Test-SentryCli) }
             } else {
                 Write-Line ("  " + (Get-Tinted 'cancelled' $script:Style.Dim))
             }
@@ -826,6 +1024,14 @@ function Invoke-Menu {
 }
 
 # ---------- main ----------
+
+if ($Opt.Action -eq 'clicheck') {
+    $Opt.CliCheck = $true    # this action *is* the check, so --no-cli-check cannot mute it
+    Write-Header
+    $issues = Test-SentryCli
+    Write-Line ''
+    exit $issues
+}
 
 if ($Opt.Action -eq 'list') {
     if (Test-Interactive) {
@@ -891,6 +1097,8 @@ foreach ($target in $targets) {
 if ($Opt.Action -eq 'uninstall') {
     Write-Line 'Done. Reload or restart your editor to drop the extension.'
 } else {
+    if ($failures -lt $targets.Count) { [void](Test-SentryCli) }
+    Write-Line ''
     Write-Line "Done. Run 'Developer: Reload Window' in each editor to load the current build."
     Write-Line "Tip: 'npm run watch' + reload gives a fast edit/test loop."
 }

@@ -139,3 +139,48 @@ elsewhere are left alone, real directories require `--force` (or an explicit
 confirmation in the picker), links from older versions are pruned so the editor
 cannot load two copies, and links are removed with a non-recursive delete so the
 repository behind them can never be touched.
+
+### Sentry CLI check
+
+After a successful link, both implementations print an advisory about
+`sentry-cli` — optional tooling, but it is where the extension's one-time token
+import reads from, and what uploads sourcemaps so production stack frames
+resolve to real files:
+
+```
+  Sentry CLI (optional — token import and sourcemap uploads)
+  ● sentry-cli 3.6.2  /usr/bin/sentry-cli
+  ● auth token on file (~/.sentryclirc)
+```
+
+When the CLI is missing it lists the install commands for your platform — npm on
+any OS, plus the official installer on Linux/macOS, Homebrew on macOS, or Scoop
+on Windows when those are present — and offers to run one for you:
+
+```
+  ▲ not installed
+  install with:
+    1) npm install -g @sentry/cli
+    2) curl -sL https://sentry.io/get-cli/ | sh
+  Install now? [1-2, or N to skip] ›
+```
+
+The token check looks at `$SENTRY_AUTH_TOKEN` and `.sentryclirc` (project, then
+home) and reports only *where* a token was found, never its value. Everything
+here is advisory: it never changes the link's exit status, it only prompts on a
+terminal (piped runs just print the commands), and `--no-cli-check` skips it.
+
+To run the check on its own, without creating or removing any links:
+
+```bash
+npm run doctor                      # same as --cli-check / --doctor
+```
+
+You can also press `c` in the `npm run links` picker at any time. Unlike the
+post-link advisory, the standalone check **exits with the number of problems
+found** — `0` when the CLI is healthy and a token is on file, `1` if one of those
+is missing, `2` if both — so it works as a scripted precondition:
+
+```bash
+npm run doctor >/dev/null 2>&1 || echo 'set up sentry-cli first'
+```
