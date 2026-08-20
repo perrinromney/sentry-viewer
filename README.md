@@ -116,10 +116,26 @@ terminal: color is disabled when piped, when `$NO_COLOR` is set, or with
 `--no-color`; box-drawing glyphs fall back to ASCII on non-UTF-8 locales or with
 `--ascii`; the table narrows to fit `$COLUMNS`.
 
-Portability: works on Linux, macOS (including stock bash 3.2), and Windows
-git-bash; it probes the canonical `~/.<editor>/extensions` paths plus
-remote/WSL server directories (`~/.vscode-server/extensions`, …), Linux Flatpak
-sandboxes, and `$VSCODE_EXTENSIONS` (which, when set, wins outright). It never
-deletes anything it did not create: symlinks pointing elsewhere are left alone,
-real directories require `--force`, and links from older versions of this
-extension are pruned so the editor cannot load two copies.
+Portability: the npm scripts run `scripts/run-link.mjs`, which dispatches to a
+native implementation per platform — PowerShell (`scripts/install-link.ps1`) on
+Windows, and the shell version (`scripts/install-link.sh`) elsewhere. Both accept
+the same `--flags`, print the same table, and understand each other's links, so
+`npm run link -- --cursor` behaves identically everywhere. Override the choice
+with `SENTRY_LINK_IMPL=sh|ps` (for example to use Git Bash on Windows).
+
+- **Windows**: needs PowerShell (5.1 ships with Windows; 7+ works too) — no Git
+  Bash required. Directory symlinks normally need Developer Mode or an elevated
+  shell, so when symlink creation is denied the script automatically falls back
+  to a **directory junction**, which needs no privileges; `--junction` forces
+  that. The PowerShell switch style (`-Cursor`, `-DryRun`) is accepted alongside
+  `--cursor`/`--dry-run`.
+- **Linux/macOS**: bash 3.2+ (so stock macOS works), no GNU-only tools.
+- Both probe the canonical `~/.<editor>/extensions` paths plus remote/WSL server
+  directories (`~/.vscode-server/extensions`, …), Linux Flatpak sandboxes, and
+  `$VSCODE_EXTENSIONS` (which, when set, wins outright).
+
+Neither implementation deletes anything it did not create: links pointing
+elsewhere are left alone, real directories require `--force` (or an explicit
+confirmation in the picker), links from older versions are pruned so the editor
+cannot load two copies, and links are removed with a non-recursive delete so the
+repository behind them can never be touched.

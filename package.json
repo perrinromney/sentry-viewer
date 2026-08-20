@@ -22,10 +22,10 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "package": "npm run typecheck && npm run build && vsce package --no-dependencies",
-    "link": "bash scripts/install-link.sh --install",
-    "unlink": "bash scripts/install-link.sh --uninstall --all",
-    "links": "bash scripts/install-link.sh --list",
-    "links:list": "bash scripts/install-link.sh --plain"
+    "link": "node scripts/run-link.mjs --install",
+    "unlink": "node scripts/run-link.mjs --uninstall --all",
+    "links": "node scripts/run-link.mjs --list",
+    "links:list": "node scripts/run-link.mjs --plain"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
