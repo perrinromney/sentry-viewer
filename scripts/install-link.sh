@@ -788,6 +788,41 @@ unlink_target_dir() {
 # sourcemaps so production stack frames resolve to real files. Nothing here can
 # fail a link.
 
+# Every PATH match for a command, in order. Some installers (npm on Windows,
+# distro packages shadowing a manual install) leave more than one, and the first
+# one is not always the working one -- so probe them all before giving up.
+cli_candidates() {
+  local name="$1"
+  if ! type -a -P "$name" 2>/dev/null; then
+    command -v "$name" 2>/dev/null || true
+  fi
+  return 0
+}
+
+CLI_SOURCE=""    # resolution reported to the user
+CLI_VERSION=""   # version string when healthy
+CLI_TRIED=""     # newline-separated resolutions attempted
+
+# 0 = healthy, 1 = present but no usable --version output, 2 = not installed.
+probe_sentry_cli() {
+  CLI_SOURCE=""; CLI_VERSION=""; CLI_TRIED=""
+  local candidate out
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+    [ -n "$CLI_SOURCE" ] || CLI_SOURCE="$candidate"
+    CLI_TRIED="$CLI_TRIED
+$candidate"
+    out="$("$candidate" --version 2>/dev/null | head -n 1 || true)"
+    case "$out" in
+      *[0-9]*) CLI_VERSION="$out"; CLI_SOURCE="$candidate"; return 0 ;;
+    esac
+  done <<EOF
+$(cli_candidates sentry-cli)
+EOF
+  [ -n "$CLI_SOURCE" ] && return 1
+  return 2
+}
+
 # Print where a sentry-cli token lives. Never prints the token itself.
 sentry_token_source() {
   if [ -n "${SENTRY_AUTH_TOKEN:-}" ]; then
@@ -887,20 +922,26 @@ check_sentry_cli() {
   say ""
   say "  $(tint "Sentry CLI" "$C_BOLD") $(tint "(optional - token import and sourcemap uploads)" "$C_DIM")"
 
-  local cli_path version
-  cli_path="$(command -v sentry-cli 2>/dev/null || true)"
-  if [ -n "$cli_path" ]; then
-    if version="$(sentry-cli --version 2>/dev/null)"; then
-      step "$(tint "$G_OK" "$C_GREEN") $version  $(tint "$cli_path" "$C_DIM")"
-    else
-      step "$(tint "$G_WARN" "$C_YELLOW") found at $cli_path but 'sentry-cli --version' failed - the binary looks broken"
-      issues=$((issues + 1))
-    fi
+  probe_sentry_cli
+  local probe_status=$?
+  if [ "$probe_status" -eq 0 ]; then
+    step "$(tint "$G_OK" "$C_GREEN") $CLI_VERSION  $(tint "$CLI_SOURCE" "$C_DIM")"
+  elif [ "$probe_status" -eq 1 ]; then
+    step "$(tint "$G_WARN" "$C_YELLOW") installed but 'sentry-cli --version' printed no version - it looks broken"
+    local attempt
+    while IFS= read -r attempt; do
+      [ -n "$attempt" ] || continue
+      step "$(tint "       tried: $attempt" "$C_DIM")"
+    done <<EOF
+$CLI_TRIED
+EOF
+    step "$(tint "       run that command yourself to see the error" "$C_DIM")"
+    issues=$((issues + 1))
   else
     step "$(tint "$G_WARN not installed" "$C_YELLOW")"
     offer_cli_install
-    cli_path="$(command -v sentry-cli 2>/dev/null || true)"
-    [ -n "$cli_path" ] || issues=$((issues + 1))
+    probe_sentry_cli || true
+    [ -n "$CLI_SOURCE" ] || issues=$((issues + 1))
   fi
 
   local source
@@ -909,7 +950,7 @@ check_sentry_cli() {
     step "$(tint "the extension can import it on first run: Sentry: Sign In" "$C_DIM")"
   else
     step "$(tint "$G_WARN no auth token on file" "$C_YELLOW")"
-    if [ -n "$cli_path" ]; then
+    if [ -n "$CLI_SOURCE" ]; then
       step "       Create one at $(tint "https://sentry.io/settings/account/api/auth-tokens/" "$C_CYAN") then run:"
       step "         sentry-cli login"
     else

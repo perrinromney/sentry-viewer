@@ -600,7 +600,7 @@ function Invoke-BuildOnce {
     Write-Step 'building...'
     Push-Location $RepoDir
     try {
-        $npm = Get-Command npm -ErrorAction SilentlyContinue
+        $npm = Get-PreferredCommand 'npm'
         if (-not $npm) {
             Write-Step ((Get-Tinted 'error' $script:Style.Red) + ': npm not found on PATH')
             return $false
@@ -684,7 +684,7 @@ function Remove-OurLinks([string] $dir, [string] $keep = '') {
 
 function Test-CliSees([string] $cli, [string] $dir) {
     if (-not $cli -or $Opt.DryRun) { return }
-    $cmd = Get-Command $cli -ErrorAction SilentlyContinue
+    $cmd = Get-PreferredCommand $cli
     if (-not $cmd) { return }
     try {
         $listed = & $cmd.Source '--list-extensions' '--extensions-dir' $dir 2>$null
@@ -757,6 +757,73 @@ function Invoke-UnlinkTarget([string] $dir) {
 # where the extension's one-time token import reads from, and what uploads
 # sourcemaps so production stack frames resolve to real files. Nothing here can
 # fail a link.
+
+# All resolutions for a command name, real executables first.
+#
+# On Windows, npm installs three shims per binary (foo, foo.cmd, foo.ps1) and
+# Get-Command returns the .ps1 first. Invoking that shim from inside another
+# script gives unreliable stdout/$LASTEXITCODE, which made a perfectly healthy
+# sentry-cli report as broken. Prefer the Application (.cmd/.exe) form.
+function Get-CommandCandidates([string] $name) {
+    $all = @(Get-Command $name -All -ErrorAction SilentlyContinue)
+    $ordered = New-Object System.Collections.ArrayList
+    foreach ($type in @('Application', 'ExternalScript')) {
+        foreach ($candidate in $all) {
+            if ($candidate.CommandType -eq $type) { [void]$ordered.Add($candidate) }
+        }
+    }
+    foreach ($candidate in $all) {
+        if (-not ($ordered -contains $candidate)) { [void]$ordered.Add($candidate) }
+    }
+    return $ordered
+}
+
+function Get-PreferredCommand([string] $name) {
+    $candidates = Get-CommandCandidates $name
+    if ($candidates.Count -gt 0) { return $candidates[0] }
+    return $null
+}
+
+# Run "<cmd> --version" and return the first non-empty output line, or ''.
+# Deliberately avoids a pipeline so shims cannot be cancelled mid-run, and
+# treats version-looking output as success even if the shim leaves a stale
+# exit code behind.
+function Get-CommandVersionText($candidate) {
+    try {
+        $global:LASTEXITCODE = 0
+        $raw = & $candidate.Source '--version' 2>$null
+        $code = $LASTEXITCODE
+        $text = ''
+        foreach ($line in @($raw)) {
+            $trimmed = ([string]$line).Trim()
+            if ($trimmed) { $text = $trimmed; break }
+        }
+        if ($text -and ($code -eq 0 -or $text -match '\d+\.\d+')) { return $text }
+    } catch { }
+    return ''
+}
+
+# Resolved sentry-cli plus its health, trying every resolution before giving up.
+# Tried holds each resolution attempted, so an unhealthy result can say why.
+function Get-SentryCliInfo {
+    $candidates = Get-CommandCandidates 'sentry-cli'
+    if ($candidates.Count -eq 0) { return $null }
+    $tried = New-Object System.Collections.ArrayList
+    foreach ($candidate in $candidates) {
+        # Annotate only the interesting case: a shim rather than a real
+        # executable, which is what goes wrong with npm's .ps1 wrappers.
+        if ($candidate.CommandType -eq 'Application') {
+            [void]$tried.Add([string]$candidate.Source)
+        } else {
+            [void]$tried.Add("$($candidate.Source) ($($candidate.CommandType))")
+        }
+        $version = Get-CommandVersionText $candidate
+        if ($version) {
+            return [pscustomobject]@{ Source = $candidate.Source; Version = $version; Healthy = $true; Tried = $tried }
+        }
+    }
+    return [pscustomobject]@{ Source = $candidates[0].Source; Version = ''; Healthy = $false; Tried = $tried }
+}
 
 # Where a sentry-cli token lives. Never returns the token itself.
 function Get-SentryTokenSource {
@@ -837,7 +904,7 @@ function Invoke-CliInstallOffer {
     Write-Line ''
     Write-Step "running: $($chosen.Label)"
     Write-Line ''
-    $exe = Get-Command $chosen.Exe -ErrorAction SilentlyContinue
+    $exe = Get-PreferredCommand $chosen.Exe
     if (-not $exe) {
         Write-Step ((Get-Tinted 'error' $script:Style.Red) + ": $($chosen.Exe) is not on PATH")
         return
@@ -847,10 +914,9 @@ function Invoke-CliInstallOffer {
     $code = $LASTEXITCODE
     Write-Line ''
     if ($code -eq 0) {
-        $found = Get-Command sentry-cli -ErrorAction SilentlyContinue
+        $found = Get-SentryCliInfo
         if ($found) {
-            $version = ''
-            try { $version = (& $found.Source '--version' 2>$null | Select-Object -First 1) } catch { }
+            $version = $found.Version
             if (-not $version) { $version = 'sentry-cli' }
             Write-Step ((Get-Tinted "$($script:Style.Ok) installed" $script:Style.Green) + " $version")
         } else {
@@ -875,26 +941,23 @@ function Test-SentryCli {
     Write-Line ("  " + (Get-Tinted 'Sentry CLI' $script:Style.Bold) + " " +
                 (Get-Tinted '(optional - token import and sourcemap uploads)' $script:Style.Dim))
 
-    $cli = Get-Command sentry-cli -ErrorAction SilentlyContinue
+    $cli = Get-SentryCliInfo
     if ($cli) {
-        $version = ''
-        $ok = $true
-        try {
-            $global:LASTEXITCODE = 0
-            $version = (& $cli.Source '--version' 2>$null | Select-Object -First 1)
-            if ($LASTEXITCODE -ne 0) { $ok = $false }
-        } catch { $ok = $false }
-        if ($ok -and $version) {
-            Write-Step ((Get-Tinted $script:Style.Ok $script:Style.Green) + " $version  " + (Get-Tinted $cli.Source $script:Style.Dim))
+        if ($cli.Healthy) {
+            Write-Step ((Get-Tinted $script:Style.Ok $script:Style.Green) + " $($cli.Version)  " + (Get-Tinted $cli.Source $script:Style.Dim))
         } else {
             Write-Step ((Get-Tinted $script:Style.Warn $script:Style.Yellow) +
-                        " found at $($cli.Source) but 'sentry-cli --version' failed - the binary looks broken")
+                        " installed but 'sentry-cli --version' printed no version - it looks broken")
+            foreach ($attempt in $cli.Tried) {
+                Write-Step (Get-Tinted "       tried: $attempt" $script:Style.Dim)
+            }
+            Write-Step (Get-Tinted '       run that command yourself to see the error' $script:Style.Dim)
             $issues++
         }
     } else {
         Write-Step (Get-Tinted "$($script:Style.Warn) not installed" $script:Style.Yellow)
         Invoke-CliInstallOffer
-        $cli = Get-Command sentry-cli -ErrorAction SilentlyContinue
+        $cli = Get-SentryCliInfo
         if (-not $cli) { $issues++ }
     }
 
