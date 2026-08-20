@@ -7,12 +7,12 @@
 # a numbered table of editors, choose a row, then link or unlink it.
 #
 # Portability notes:
-#   * Works with bash 3.2 (stock macOS) upwards — no associative arrays,
+#   * Works with bash 3.2 (stock macOS) upwards - no associative arrays,
 #     no GNU-only flags such as `readlink -f`.
 #   * VS Code and its forks keep extensions under the user's home directory on
 #     every platform (only user-data lives in ~/Library or %APPDATA%), so the
 #     same relative paths apply on Linux, macOS, and Windows (git-bash/MSYS).
-#   * Also probes remote/WSL server directories (.vscode-server, …) and Linux
+#   * Also probes remote/WSL server directories (.vscode-server, ...) and Linux
 #     Flatpak sandboxes, and honours $VSCODE_EXTENSIONS.
 #   * Anything unusual: pass --path DIR.
 #
@@ -327,7 +327,7 @@ TARGETS (repeatable)
   --detected               every known editor whose directory already exists
   --path DIR               a specific extensions directory
 
-  Remote/WSL server dirs (.vscode-server/extensions, .cursor-server/…) and
+  Remote/WSL server dirs (.vscode-server/extensions, .cursor-server/...) and
   Linux Flatpak sandboxes are probed automatically, as is \$VSCODE_EXTENSIONS.
 
 ACTIONS
@@ -646,13 +646,13 @@ ensure_build() {
     BUILT=1
     return 0
   fi
-  step "building…"
+  step "building..."
   if ( cd "$REPO_DIR" && npm run build >/dev/null 2>&1 ); then
     BUILT=1
     step "dist/ built"
     return 0
   fi
-  step "$(tint error "$C_RED"): build failed — run 'npm run build' to see why"
+  step "$(tint error "$C_RED"): build failed - run 'npm run build' to see why"
   return 1
 }
 
@@ -724,7 +724,7 @@ verify_with_cli() {
   if "$cli" --list-extensions --extensions-dir "$dir" 2>/dev/null | grep -qx "$PUBLISHER.$NAME"; then
     step "$(tint verified "$C_GREEN"): $cli sees $PUBLISHER.$NAME in this directory"
   else
-    step "$(tint note "$C_YELLOW"): $cli does not list it yet — restart the editor"
+    step "$(tint note "$C_YELLOW"): $cli does not list it yet - restart the editor"
   fi
 }
 
@@ -783,7 +783,7 @@ unlink_target_dir() {
 # ---------- sentry-cli health / token advisory ----------
 #
 # Advisory only: the extension talks to Sentry itself and keeps its own token in
-# SecretStorage or .sentry_viewer/local.json. sentry-cli is a convenience — it
+# SecretStorage or .sentry_viewer/local.json. sentry-cli is a convenience - it
 # is where the extension's one-time token import reads from, and what uploads
 # sourcemaps so production stack frames resolve to real files. Nothing here can
 # fail a link.
@@ -869,7 +869,7 @@ offer_cli_install() {
     fi
   else
     say ""
-    step "$(tint "install failed" "$C_YELLOW") — try another option above."
+    step "$(tint "install failed" "$C_YELLOW") - try another option above."
     case "$chosen" in
       npm*) step "       A global npm install may need sudo, or set a user prefix:"
             step "         npm config set prefix ~/.local && npm install -g @sentry/cli" ;;
@@ -885,7 +885,7 @@ check_sentry_cli() {
   [ "$CLI_CHECK" -eq 1 ] || return 0
   local issues=0
   say ""
-  say "  $(tint "Sentry CLI" "$C_BOLD") $(tint "(optional — token import and sourcemap uploads)" "$C_DIM")"
+  say "  $(tint "Sentry CLI" "$C_BOLD") $(tint "(optional - token import and sourcemap uploads)" "$C_DIM")"
 
   local cli_path version
   cli_path="$(command -v sentry-cli 2>/dev/null || true)"
@@ -893,7 +893,7 @@ check_sentry_cli() {
     if version="$(sentry-cli --version 2>/dev/null)"; then
       step "$(tint "$G_OK" "$C_GREEN") $version  $(tint "$cli_path" "$C_DIM")"
     else
-      step "$(tint "$G_WARN" "$C_YELLOW") found at $cli_path but 'sentry-cli --version' failed — the binary looks broken"
+      step "$(tint "$G_WARN" "$C_YELLOW") found at $cli_path but 'sentry-cli --version' failed - the binary looks broken"
       issues=$((issues + 1))
     fi
   else
@@ -1005,7 +1005,7 @@ EOF
     esac
 
     say ""
-    prompt_read "  (l)ink $(tint "— $link_hint" "$C_DIM") $(tint "$G_SEP" "$C_DIM") (u)nlink $(tint "$G_SEP" "$C_DIM") (b)ack $G_PROMPT "
+    prompt_read "  (l)ink $(tint "- $link_hint" "$C_DIM") $(tint "$G_SEP" "$C_DIM") (u)nlink $(tint "$G_SEP" "$C_DIM") (b)ack $G_PROMPT "
     say ""
 
     case "$ANSWER" in

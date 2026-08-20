@@ -181,12 +181,26 @@ if (-not $Opt.Action) { $Opt.Action = 'list' }
 
 $script:Style = @{}
 
+function Get-PlatformKind {
+    # $IsWindows/$IsMacOS only exist in PowerShell 6+; 5.1 is Windows-only.
+    if (Get-Variable -Name 'IsWindows' -ErrorAction SilentlyContinue) {
+        if ($IsWindows) { return 'windows' }
+        if ($IsMacOS)   { return 'macos' }
+        return 'linux'
+    }
+    return 'windows'
+}
+
 function Test-ColorSupported {
     if ($Opt.ColorMode -eq 'never')  { return $false }
     if ($Opt.ColorMode -eq 'always') { return $true }
     if ($env:NO_COLOR) { return $false }
     try { if ([Console]::IsOutputRedirected) { return $false } } catch { }
     if ($env:WT_SESSION -or $env:TERM_PROGRAM -or $env:ConEmuANSI -eq 'ON') { return $true }
+    if ((Get-PlatformKind) -ne 'windows') {
+        # Match install-link.sh: on Unix an unset or dumb TERM means no color.
+        return ($env:TERM -and $env:TERM -ne 'dumb')
+    }
     if ($env:TERM -and $env:TERM -ne 'dumb') { return $true }
     try { if ($Host.UI.SupportsVirtualTerminal) { return $true } } catch { }
     return $false
@@ -195,6 +209,15 @@ function Test-ColorSupported {
 function Test-UnicodeSupported {
     if ($Opt.GlyphMode -eq 'ascii')   { return $false }
     if ($Opt.GlyphMode -eq 'unicode') { return $true }
+    if ((Get-PlatformKind) -ne 'windows') {
+        # Match install-link.sh: on Unix the locale decides, and an unset or
+        # non-UTF-8 locale means ASCII. Console encoding is not a usable signal
+        # there because .NET reports UTF-8 regardless of LANG.
+        $locale = $env:LC_ALL
+        if (-not $locale) { $locale = $env:LC_CTYPE }
+        if (-not $locale) { $locale = $env:LANG }
+        return [bool]($locale -match '(?i)utf-?8')
+    }
     if ($env:WT_SESSION -or $env:TERM_PROGRAM) { return $true }
     try {
         $enc = [Console]::OutputEncoding
@@ -730,20 +753,10 @@ function Invoke-UnlinkTarget([string] $dir) {
 # ---------- sentry-cli health / token advisory ----------
 #
 # Advisory only: the extension talks to Sentry itself and keeps its own token in
-# SecretStorage or .sentry_viewer/local.json. sentry-cli is a convenience — it is
+# SecretStorage or .sentry_viewer/local.json. sentry-cli is a convenience - it is
 # where the extension's one-time token import reads from, and what uploads
 # sourcemaps so production stack frames resolve to real files. Nothing here can
 # fail a link.
-
-function Get-PlatformKind {
-    # $IsWindows/$IsMacOS only exist in PowerShell 6+; 5.1 is Windows-only.
-    if (Get-Variable -Name 'IsWindows' -ErrorAction SilentlyContinue) {
-        if ($IsWindows) { return 'windows' }
-        if ($IsMacOS)   { return 'macos' }
-        return 'linux'
-    }
-    return 'windows'
-}
 
 # Where a sentry-cli token lives. Never returns the token itself.
 function Get-SentryTokenSource {
@@ -845,7 +858,7 @@ function Invoke-CliInstallOffer {
             Write-Step '       Open a new terminal, or add the global bin directory to PATH.'
         }
     } else {
-        Write-Step ((Get-Tinted 'install failed' $script:Style.Yellow) + ' — try another option above.')
+        Write-Step ((Get-Tinted 'install failed' $script:Style.Yellow) + ' - try another option above.')
         if ($chosen.Exe -eq 'npm') {
             Write-Step '       A global npm install may need elevation, or set a user prefix:'
             Write-Step '         npm config set prefix ~/.local ; npm install -g @sentry/cli'
@@ -860,7 +873,7 @@ function Test-SentryCli {
     $issues = 0
     Write-Line ''
     Write-Line ("  " + (Get-Tinted 'Sentry CLI' $script:Style.Bold) + " " +
-                (Get-Tinted '(optional — token import and sourcemap uploads)' $script:Style.Dim))
+                (Get-Tinted '(optional - token import and sourcemap uploads)' $script:Style.Dim))
 
     $cli = Get-Command sentry-cli -ErrorAction SilentlyContinue
     if ($cli) {
@@ -875,7 +888,7 @@ function Test-SentryCli {
             Write-Step ((Get-Tinted $script:Style.Ok $script:Style.Green) + " $version  " + (Get-Tinted $cli.Source $script:Style.Dim))
         } else {
             Write-Step ((Get-Tinted $script:Style.Warn $script:Style.Yellow) +
-                        " found at $($cli.Source) but 'sentry-cli --version' failed — the binary looks broken")
+                        " found at $($cli.Source) but 'sentry-cli --version' failed - the binary looks broken")
             $issues++
         }
     } else {
